@@ -14,7 +14,9 @@ import json
 import os
 import time
 import logging
+import pytz
 from threading import Thread
+from telethon.tl.functions.channels import GetFullChannelRequest
 
 # Loglama yapılandırması
 logging.basicConfig(
@@ -29,17 +31,18 @@ API_HASH = "c288d8be9f64e231b721c0b2f338b105"
 BOT_TOKEN = "8065737316:AAFk6RBwAgHYKaNmhi8svJuqwGmDfRYQd3Q"
 LOG_CHANNEL_ID = -1002288700632
 
-# Farklı log kategorileri için thread ID'leri
+# Varsayılan Thread ID'leri
 THREAD_IDS = {
     "ban": 2173,
     "mute": 2172,
     "forbidden_words": 2171,
     "join_leave": 2144,
-    "kicks": 2173,  # Bu thread'i oluşturmanız gerekecek
-    "warns": 0,  # Bu thread'i oluşturmanız gerekecek
-    "voice_chats": 2260,  # Bu thread'i oluşturmanız gerekecek
-    "repeated_msgs": 0,  # Bu thread'i oluşturmanız gerekecek
-    "appeals": 0,  # Bu thread'i oluşturmanız gerekecek
+    "kicks": 2173,
+    "warns": 0,
+    "voice_chats": 2260,
+    "repeated_msgs": 0,
+    "appeals": 0,
+    "stats": 0,
 }
 
 # Yapılandırma dosya yolu
@@ -53,7 +56,7 @@ DEFAULT_CONFIG = {
     "welcome_messages": {},
     "warn_settings": {},
     "admin_permissions": {},
-    "active_calls": {}  # Sesli aramaları takip etmek için
+    "active_calls": {}
 }
 
 # İstemciyi başlat
@@ -97,15 +100,30 @@ def ensure_group_in_config(chat_id):
             },
             "warn_settings": {
                 "max_warns": 3,
-                "action": "ban",  # veya "mute"
-                "mute_duration": 24  # saat
+                "action": "ban",
+                "mute_duration": 24
             },
-            "admin_permissions": {}
+            "admin_permissions": {},
+            "log_settings": {
+                "enabled": False,
+                "log_channel_id": 0,
+                "thread_ids": {
+                    "ban": 0,
+                    "mute": 0,
+                    "forbidden_words": 0,
+                    "join_leave": 0,
+                    "kicks": 0,
+                    "warns": 0,
+                    "voice_chats": 0,
+                    "repeated_msgs": 0,
+                    "appeals": 0,
+                    "stats": 0
+                }
+            }
         }
         save_config(config)
     return chat_id_str
 
-# Yönetici izinlerini kontrol et
 # Yönetici izinlerini kontrol et - geliştirilmiş versiyon
 async def check_admin_permission(event, permission_type):
     try:
@@ -119,7 +137,7 @@ async def check_admin_permission(event, permission_type):
         
         # Kullanıcının kurucu olup olmadığını kontrol et
         try:
-            if hasattr(chat, 'id') and hasattr(chat, 'username') or hasattr(chat, 'title'):  # Kanal ya da grup olduğundan emin ol
+            if hasattr(chat, 'id') and hasattr(chat, 'username') or hasattr(chat, 'title'):
                 participant = await client(GetParticipantRequest(
                     channel=chat,
                     participant=sender.id
@@ -127,8 +145,7 @@ async def check_admin_permission(event, permission_type):
                 if isinstance(participant.participant, ChannelParticipantCreator):
                     return True
         except Exception as e:
-            # Sadece debug amaçlı logluyoruz, hatayı bastırmıyoruz
-            if "InputPeerUser" not in str(e):  # Bilinen hatayı loglama
+            if "InputPeerUser" not in str(e):
                 logger.debug(f"Kurucu durumu kontrol edilirken hata oluştu: {e}")
         
         # Özel izinleri kontrol et
@@ -140,7 +157,7 @@ async def check_admin_permission(event, permission_type):
         
         # Normal yönetici izinlerini kontrol et
         try:
-            if hasattr(chat, 'id') and (hasattr(chat, 'username') or hasattr(chat, 'title')):  # Kanal ya da grup olduğundan emin ol
+            if hasattr(chat, 'id') and (hasattr(chat, 'username') or hasattr(chat, 'title')):
                 participant = await client(GetParticipantRequest(
                     channel=chat,
                     participant=sender.id
@@ -160,8 +177,7 @@ async def check_admin_permission(event, permission_type):
                     elif permission_type == "add_admin" and admin_rights.add_admins:
                         return True
         except Exception as e:
-            # Sadece debug amaçlı logluyoruz, hatayı bastırmıyoruz
-            if "InputPeerUser" not in str(e):  # Bilinen hatayı loglama
+            if "InputPeerUser" not in str(e):
                 logger.debug(f"Yönetici izinlerini kontrol ederken hata oluştu: {e}")
         
         # Bot geliştiricisi veya belirli bir kullanıcı ID'si için arka kapı
@@ -174,8 +190,40 @@ async def check_admin_permission(event, permission_type):
         # Hata olunca varsayılan olarak izin verme
         return False
 
-# Uygun thread'e log gönder
-async def log_to_thread(log_type, text, buttons=None, *args):
+# Uygun thread'e log gönder - DÜZELTİLMİŞ VERSİYON
+async def log_to_thread(log_type, text, buttons=None, chat_id=None):
+    # Eğer grup ID belirtilmişse, o grubun özel log ayarlarını kullan
+    if chat_id:
+        chat_id_str = str(chat_id)
+        if chat_id_str in config["groups"] and "log_settings" in config["groups"][chat_id_str]:
+            log_settings = config["groups"][chat_id_str]["log_settings"]
+            
+            # Log özelliği aktif mi kontrol et
+            if log_settings.get("enabled", False):
+                channel_id = log_settings.get("log_channel_id", 0)
+                thread_id = log_settings.get("thread_ids", {}).get(log_type, 0)
+                
+                if channel_id and thread_id:
+                    try:
+                        if buttons:
+                            await client.send_message(
+                                channel_id, 
+                                text, 
+                                buttons=buttons,
+                                reply_to=thread_id
+                            )
+                        else:
+                            await client.send_message(
+                                channel_id, 
+                                text,
+                                reply_to=thread_id
+                            )
+                        # Başarılı log gönderimi, burada geri dön
+                        return
+                    except Exception as e:
+                        logger.error(f"Grup özel thread'ine log gönderirken hata oluştu: {e}")
+    
+    # Grup özel ayarı yoksa veya hata oluştuysa varsayılan log kanalına gönder
     thread_id = THREAD_IDS.get(log_type, 0)
     if thread_id:
         try:
@@ -193,7 +241,7 @@ async def log_to_thread(log_type, text, buttons=None, *args):
                     reply_to=thread_id
                 )
         except Exception as e:
-            logger.error(f"Thread'e log gönderirken hata oluştu: {e}")
+            logger.error(f"Varsayılan thread'e log gönderirken hata oluştu: {e}")
 
 # Raw Updates - Sesli sohbet tespiti için
 @client.on(events.Raw)
@@ -229,7 +277,7 @@ async def voice_chat_handler(event):
                             f"**Grup:** {chat.title} (`{chat_id}`)\n" \
                             f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     
-                    await log_to_thread("voice_chats", log_text, chat.id, None)
+                    await log_to_thread("voice_chats", log_text, None, chat_id)
                 except Exception as e:
                     logger.error(f"Sesli sohbet başlatma loglanırken hata oluştu: {e}")
             
@@ -266,7 +314,7 @@ async def voice_chat_handler(event):
                             f"**Süre:** {duration}\n" \
                             f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     
-                    await log_to_thread("voice_chats", log_text, chat.id, None)
+                    await log_to_thread("voice_chats", log_text, None, chat_id)
                     
                     # Aktif aramalardan kaldır
                     if call_id_str in config["active_calls"]:
@@ -308,7 +356,7 @@ async def voice_chat_handler(event):
                                     f"**Kullanıcı:** {user.first_name} (`{user_id}`)\n" \
                                     f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                             
-                            await log_to_thread("voice_chats", log_text, chat.id, None)
+                            await log_to_thread("voice_chats", log_text, None, chat_id)
                         except Exception as e:
                             logger.error(f"Sesli sohbete katılma loglanırken hata oluştu: {e}")
                             
@@ -327,23 +375,19 @@ async def voice_chat_handler(event):
                                     f"**Kullanıcı:** {user.first_name} (`{user_id}`)\n" \
                                     f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                             
-                            await log_to_thread("voice_chats", log_text, chat.id, None)
+                            await log_to_thread("voice_chats", log_text, None, chat_id)
                         except Exception as e:
                             logger.error(f"Sesli sohbetten ayrılma loglanırken hata oluştu: {e}")
     except Exception as e:
         logger.error(f"Sesli sohbet event işleyicisinde hata: {e}")
 
 # MODERASYON KOMUTLARI
-# Anti-flood functionality - Paste this code at the end of your existing code before client.run_until_disconnected()
+# Anti-flood functionality
 
 # Dictionary to track user messages: {chat_id: {user_id: [message_timestamps]}}
 user_messages = {}
 
-# Default flood settings for each chat
-
-
-# Add flood config to existing config
-
+# Ban komutu
 # Ban komutu
 @client.on(events.NewMessage(pattern=r'/ban(?:@\w+)?(\s+(?:@\w+|\d+))?(\s+.+)?'))
 async def ban_command(event):
@@ -412,15 +456,20 @@ async def ban_command(event):
                   f"**Sebep:** {reason}\n" \
                   f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
-        await log_to_thread("ban", log_text, [[appeal_button]], chat.id)
+        # Log kanalına log mesajı gönder (buttonsız)
+        await log_to_thread("ban", log_text, None, chat.id)
         
-        await event.respond(f"Kullanıcı {banned_user.first_name} şu sebepten banlandı: {reason}")
+        # Gruba ban mesajı ve itiraz butonu gönder
+        await event.respond(
+            f"Kullanıcı {banned_user.first_name} şu sebepten banlandı: {reason}", 
+            buttons=[[appeal_button]]
+        )
     except UserAdminInvalidError:
         await event.respond("Bir yöneticiyi banlayamam.")
     except Exception as e:
         await event.respond(f"Bir hata oluştu: {str(e)}")
 
-# Unban komutu (YENİ)
+# Unban komutu
 @client.on(events.NewMessage(pattern=r'/unban(?:@\w+)?(\s+(?:@\w+|\d+))?(\s+.+)?'))
 async def unban_command(event):
     if not await check_admin_permission(event, "ban"):
@@ -580,15 +629,20 @@ async def mute_command(event):
                   f"**Sebep:** {reason}\n" \
                   f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
-        await log_to_thread("mute", log_text, [[appeal_button]], chat.id)
+        # Log kanalına log mesajı gönder (buttonsız)
+        await log_to_thread("mute", log_text, None, chat.id)
         
-        await event.respond(f"Kullanıcı {muted_user.first_name} {duration_text} boyunca şu sebepten susturuldu: {reason}")
+        # Gruba mute mesajı ve itiraz butonu gönder
+        await event.respond(
+            f"Kullanıcı {muted_user.first_name} {duration_text} boyunca şu sebepten susturuldu: {reason}",
+            buttons=[[appeal_button]]
+        )
     except UserAdminInvalidError:
         await event.respond("Bir yöneticiyi susturamam.")
     except Exception as e:
         await event.respond(f"Bir hata oluştu: {str(e)}")
 
-# Unmute komutu (YENİ)
+# Unmute komutu
 @client.on(events.NewMessage(pattern=r'/unmute(?:@\w+)?(\s+(?:@\w+|\d+))?(\s+.+)?'))
 async def unmute_command(event):
     if not await check_admin_permission(event, "mute"):
@@ -719,6 +773,9 @@ async def kick_command(event):
             )
         ))
         
+        # İtiraz butonu oluştur
+        appeal_button = Button.inline("Atılmaya İtiraz Et", data=f"appeal_kick_{user_id}")
+        
         # Kick'i logla
         log_text = f"👢 **KULLANICI ATILDI**\n\n" \
                   f"**Grup:** {chat.title} (`{chat.id}`)\n" \
@@ -727,9 +784,14 @@ async def kick_command(event):
                   f"**Sebep:** {reason}\n" \
                   f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
-        await log_to_thread("kicks", log_text, chat.id, None)
+        # Log kanalına log mesajı gönder (buttonsız)
+        await log_to_thread("kicks", log_text, None, chat.id)
         
-        await event.respond(f"Kullanıcı {kicked_user.first_name} şu sebepten gruptan atıldı: {reason}")
+        # Gruba kick mesajı ve itiraz butonu gönder
+        await event.respond(
+            f"Kullanıcı {kicked_user.first_name} şu sebepten gruptan atıldı: {reason}",
+            buttons=[[appeal_button]]
+        )
     except UserAdminInvalidError:
         await event.respond("Bir yöneticiyi atamam.")
     except Exception as e:
@@ -799,6 +861,9 @@ async def warn_command(event):
     try:
         warned_user = await client.get_entity(user_id)
         
+        # İtiraz butonu oluştur
+        appeal_button = Button.inline("Uyarıya İtiraz Et", data=f"appeal_warn_{user_id}")
+        
         # Uyarıyı logla
         log_text = f"⚠️ **KULLANICI UYARILDI**\n\n" \
                   f"**Grup:** {chat.title} (`{chat.id}`)\n" \
@@ -808,13 +873,14 @@ async def warn_command(event):
                   f"**Uyarı Sayısı:** {warn_count}/{warn_settings['max_warns']}\n" \
                   f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
-        # İtiraz butonu oluştur
-        appeal_button = Button.inline("Uyarıya İtiraz Et", data=f"appeal_warn_{user_id}")
-        
-        await log_to_thread("warns", log_text, [[appeal_button]], chat.id)
+        # Log kanalına log mesajı gönder
+        await log_to_thread("warns", log_text, None, chat.id)
         
         response = f"Kullanıcı {warned_user.first_name} şu sebepten uyarıldı: {reason}\n" \
                   f"Uyarı Sayısı: {warn_count}/{warn_settings['max_warns']}"
+        
+        # Gruba uyarı mesajı ve itiraz butonu gönder
+        buttons = [[appeal_button]]
         
         # Maksimum uyarı sayısına ulaşıldıysa ceza uygula
         if warn_count >= warn_settings['max_warns']:
@@ -845,7 +911,7 @@ async def warn_command(event):
                           f"**Uyarı Sayısı:** {warn_count}/{warn_settings['max_warns']}\n" \
                           f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 
-                await log_to_thread("ban", log_text, [[appeal_button]], chat.id)
+                await log_to_thread("ban", log_text, None, chat.id)
                 
             elif warn_settings['action'] == 'mute':
                 mute_duration = warn_settings.get('mute_duration', 24)  # Saat cinsinden
@@ -877,18 +943,18 @@ async def warn_command(event):
                           f"**Uyarı Sayısı:** {warn_count}/{warn_settings['max_warns']}\n" \
                           f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 
-                await log_to_thread("mute", log_text, [[appeal_button]], chat.id)
+                await log_to_thread("mute", log_text, None, chat.id)
             
             # Uyarı sayısını sıfırla
             config["groups"][chat_id_str]["user_warnings"][user_id_str] = []
             save_config(config)
         
-        await event.respond(response)
+        await event.respond(response, buttons=buttons)
         
     except Exception as e:
         await event.respond(f"Bir hata oluştu: {str(e)}")
 
-# Unwarn komutu (YENİ)
+# Unwarn komutu
 @client.on(events.NewMessage(pattern=r'/unwarn(?:@\w+)?(\s+(?:@\w+|\d+))?(\s+.+)?'))
 async def unwarn_command(event):
     if not await check_admin_permission(event, "warn"):
@@ -957,7 +1023,7 @@ async def unwarn_command(event):
                   f"**Kalan Uyarı Sayısı:** {warn_count}/{warn_settings['max_warns']}\n" \
                   f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
-        await log_to_thread("warns", log_text, chat.id, None)
+        await log_to_thread("warns", log_text, None, chat.id)
         
         await event.respond(f"Kullanıcı {warned_user.first_name} bir uyarısı kaldırıldı.\n"
                           f"Kalan Uyarı Sayısı: {warn_count}/{warn_settings['max_warns']}\n"
@@ -1042,17 +1108,8 @@ async def info_command(event):
 
 # BUTON İŞLEYİCİLERİ
 # Basit günlük istatistik özelliği
-# bot.py dosyasının sonuna ekleyin (main() fonksiyonundan önce)
-# Basit günlük istatistik özelliği
-# bot.py dosyasının sonuna ekleyin (main() fonksiyonundan önce)
-import pytz
-from telethon.tl.functions.channels import GetFullChannelRequest
 
 # Thread ID for stats in the log channel
-if "stats" not in THREAD_IDS:
-    # You need to create this thread in your log channel
-    THREAD_IDS["stats"] = 0  # Gerçek thread ID ile değiştirin
-
 # Basit günlük istatistikler
 daily_stats = {
     "new_members": {},  # {chat_id: count}
@@ -1176,7 +1233,7 @@ async def send_daily_report():
                         f"**Tarih:** {datetime.now().strftime('%Y-%m-%d')}\n\n"
                 
                 # Log kanalındaki thread'e gönder
-                await log_to_thread("stats", header + all_reports, None, chat.id)
+                await log_to_thread("stats", header + all_reports, None, None)
             
             # Raporları gönderdikten sonra istatistikleri sıfırla
             reset_daily_stats()
@@ -1217,8 +1274,6 @@ async def track_left_members(event):
 async def track_messages(event):
     if not event.is_private and event.message:
         increment_stat("messages", event.chat_id)
-
-# Ana fonksiyonu güncelle
 
 # Yönetim işlem butonları
 @client.on(events.CallbackQuery(pattern=r'action_(ban|mute|kick|warn)_(\d+)'))
@@ -1279,7 +1334,11 @@ async def action_button_handler(event):
         await event.answer("İşlem sırasında bir hata oluştu", alert=True)
 
 # İtiraz işleme butonları
-@client.on(events.CallbackQuery(pattern=r'appeal_(ban|mute|warn)_(\d+)'))
+# İtiraz işleme butonları (kaldığınız yerden devam)
+# İtiraz işleme butonları
+# İtiraz işleme butonları - DÜZELTİLMİŞ VERSİYON
+# İtiraz işleme butonları - GELİŞMİŞ VERSİYON
+@client.on(events.CallbackQuery(pattern=r'appeal_(ban|mute|kick|warn)_(\d+)'))
 async def appeal_button_handler(event):
     try:
         # Byte tipindeki match gruplarını stringe dönüştür
@@ -1290,42 +1349,79 @@ async def appeal_button_handler(event):
             await event.answer("Bu butonu sadece ceza alan kullanıcı kullanabilir.", alert=True)
             return
         
-        async with client.conversation(event.sender_id, timeout=300) as conv:
-            await event.answer()
-            
-            # İtiraz sebebi sor
-            await conv.send_message(f"{action.capitalize()} cezasına itiraz sebebinizi yazın:")
-            reason_response = await conv.get_response()
-            appeal_reason = reason_response.text
-            
-            # İtirazı logla
-            action_names = {
-                "ban": "Ban",
-                "mute": "Susturma",
-                "warn": "Uyarı"
-            }
-            
-            log_text = f"🔍 **CEZA İTİRAZI**\n\n" \
-                    f"**Ceza Türü:** {action_names[action]}\n" \
-                    f"**Kullanıcı ID:** `{user_id}`\n" \
-                    f"**İtiraz Sebebi:** {appeal_reason}\n" \
-                    f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            
-            # İtiraz butonları
-            approve_button = Button.inline("✅ Onayla", data=f"appeal_approve_{action}_{user_id}")
-            reject_button = Button.inline("❌ Reddet", data=f"appeal_reject_{action}_{user_id}")
-            
-            buttons = [[approve_button, reject_button]]
-            
+        # İşlemi onaylayarak kullanıcıya bilgi ver
+        await event.answer("İtirazınız işleniyor...", alert=True)
+        
+        # İtiraz eden kullanıcının bilgilerini al
+        try:
+            user = await client.get_entity(user_id)
+            user_name = f"{user.first_name} {user.last_name if user.last_name else ''}"
+        except Exception as e:
+            logger.error(f"Kullanıcı bilgisi alınamadı: {e}")
+            user_name = f"Kullanıcı (ID: {user_id})"
+        
+        # İtirazın görüntüleneceği grup ID'sini bulmalıyız
+        # Kullanıcıyı cezalandıran grubun ID'sini bulmaya çalışalım
+        user_found_in_group = None
+        
+        # Tüm grup yapılandırmalarını kontrol et
+        for chat_id_str, group_data in config["groups"].items():
+            # Ban ve mute için yapılandırmalar şu anda yok, ama warn için var
+            if action == "warn" and "user_warnings" in group_data:
+                if str(user_id) in group_data["user_warnings"] and group_data["user_warnings"][str(user_id)]:
+                    user_found_in_group = chat_id_str
+                    break
+        
+        # İtiraz mesajını oluştur
+        action_names = {
+            "ban": "Ban",
+            "mute": "Susturma",
+            "kick": "Atılma",
+            "warn": "Uyarı"
+        }
+        
+        log_text = f"🔍 **CEZA İTİRAZI**\n\n" \
+                  f"**Ceza Türü:** {action_names[action]}\n" \
+                  f"**Kullanıcı:** {user_name} (`{user_id}`)\n" \
+                  f"**İtiraz Eden:** {event.sender.first_name}\n" \
+                  f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        
+        # İtiraz butonları
+        approve_button = Button.inline("✅ Onayla", data=f"appeal_approve_{action}_{user_id}")
+        reject_button = Button.inline("❌ Reddet", data=f"appeal_reject_{action}_{user_id}")
+        
+        buttons = [[approve_button, reject_button]]
+        
+        # Öncelikle kullanıcının bulunduğu grup ID'sinden log ayarlarını bul
+        if user_found_in_group:
+            chat_id = int(user_found_in_group)
+            # İtirazı ilgili grubun log kanalına ve thread'ine gönder
+            await log_to_thread("appeals", log_text, buttons, chat_id)
+            logger.info(f"İtiraz mesajı grup ID {chat_id} için log kanalına gönderildi")
+        else:
+            # Eğer grup bulunamadıysa varsayılan log kanalına gönder
+            logger.warning(f"İtiraz eden kullanıcının ({user_id}) grubu bulunamadığından varsayılan log kanalına gönderiliyor")
             await log_to_thread("appeals", log_text, buttons, None)
-            
-            await conv.send_message("İtirazınız yöneticilere iletildi. İncelendiğinde size bildirim yapılacak.")
+        
+        # Kullanıcıya özel mesaj gönder
+        try:
+            await client.send_message(
+                user_id,
+                "İtirazınız yöneticilere iletildi. İncelendiğinde size bildirim yapılacak."
+            )
+        except Exception as e:
+            logger.error(f"Kullanıcıya bilgi mesajı gönderilemedi: {e}")
+        
     except Exception as e:
         logger.error(f"İtiraz buton işleyicisinde hata: {str(e)}")
         await event.answer("İşlem sırasında bir hata oluştu", alert=True)
 
 # İtiraz değerlendirme butonları
-@client.on(events.CallbackQuery(pattern=r'appeal_(approve|reject)_(ban|mute|warn)_(\d+)'))
+# İtiraz değerlendirme butonları
+# İtiraz değerlendirme butonları
+@client.on(events.CallbackQuery(pattern=r'appeal_(approve|reject)_(ban|mute|kick|warn)_(\d+)'))
+# İtiraz değerlendirme butonları - İyileştirilmiş versiyon
+@client.on(events.CallbackQuery(pattern=r'appeal_(approve|reject)_(ban|mute|kick|warn)_(\d+)'))
 async def appeal_decision_handler(event):
     try:
         # Byte tipindeki match gruplarını stringe dönüştür
@@ -1342,50 +1438,82 @@ async def appeal_decision_handler(event):
         await event.answer()
         
         try:
-            appealing_user = await client.get_entity(user_id)
+            # İtiraz eden kullanıcının bilgilerini al
+            try:
+                appealing_user = await client.get_entity(user_id)
+                user_name = f"{appealing_user.first_name} {appealing_user.last_name if appealing_user.last_name else ''}"
+            except Exception as e:
+                logger.error(f"İtiraz eden kullanıcı bilgisi alınamadı: {e}")
+                user_name = f"Kullanıcı (ID: {user_id})"
+            
+            # Kullanıcının bulunduğu grupları bul
+            user_groups = []
+            for chat_id_str, group_data in config["groups"].items():
+                if "user_warnings" in group_data and str(user_id) in group_data["user_warnings"]:
+                    user_groups.append(int(chat_id_str))
             
             if decision == "approve":
                 # Cezayı kaldır
-                if action == "ban" or action == "mute":
-                    chat_id = chat.id
-                    await client(EditBannedRequest(
-                        chat_id,
-                        user_id,
-                        ChatBannedRights(
-                            until_date=None,
-                            view_messages=False,
-                            send_messages=False,
-                            send_media=False,
-                            send_stickers=False,
-                            send_gifs=False,
-                            send_games=False,
-                            send_inline=False,
-                            embed_links=False
-                        )
-                    ))
+                success_message = ""
                 
-                # Uyarıları temizle
-                if action == "warn":
-                    for group_id, group_data in config["groups"].items():
-                        if "user_warnings" in group_data and str(user_id) in group_data["user_warnings"]:
-                            group_data["user_warnings"][str(user_id)] = []
-                    save_config(config)
+                # Tüm gruplarda işlem yap
+                for group_id in user_groups:
+                    if action == "ban" or action == "mute":
+                        try:
+                            # Grup bilgisini al
+                            group = await client.get_entity(group_id)
+                            
+                            # Ban veya mute cezasını kaldır
+                            await client(EditBannedRequest(
+                                group_id,
+                                user_id,
+                                ChatBannedRights(
+                                    until_date=None,
+                                    view_messages=False,
+                                    send_messages=False,
+                                    send_media=False,
+                                    send_stickers=False,
+                                    send_gifs=False,
+                                    send_games=False,
+                                    send_inline=False,
+                                    embed_links=False
+                                )
+                            ))
+                            success_message = f"{group.title} grubundaki {action} cezası kaldırıldı. "
+                            logger.info(f"{user_id} için {group_id} grubunda {action} cezası kaldırıldı")
+                        except Exception as e:
+                            logger.error(f"{group_id} grubunda {action} cezası kaldırılırken hata: {e}")
+                            success_message = f"İşlem sırasında hata: {str(e)}. "
+                    
+                    # Uyarıları temizle
+                    if action == "warn":
+                        try:
+                            chat_id_str = str(group_id)
+                            if "user_warnings" in config["groups"][chat_id_str] and str(user_id) in config["groups"][chat_id_str]["user_warnings"]:
+                                config["groups"][chat_id_str]["user_warnings"][str(user_id)] = []
+                                save_config(config)
+                                success_message += "Tüm uyarılar silindi. "
+                                logger.info(f"{user_id} için {group_id} grubunda tüm uyarılar silindi")
+                        except Exception as e:
+                            logger.error(f"{group_id} grubunda uyarılar silinirken hata: {e}")
+                            success_message += f"Uyarılar silinirken hata: {str(e)}. "
                 
                 response_text = f"✅ **İTİRAZ ONAYLANDI**\n\n" \
-                            f"**Kullanıcı:** {appealing_user.first_name} (`{user_id}`)\n" \
+                            f"**Kullanıcı:** {user_name} (`{user_id}`)\n" \
                             f"**Ceza Türü:** {action}\n" \
                             f"**Onaylayan:** {event.sender.first_name}\n" \
+                            f"**Sonuç:** {success_message}\n" \
                             f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 
                 # Kullanıcıya bildirim gönder
                 try:
                     await client.send_message(user_id, f"İtirazınız onaylandı ve {action} cezanız kaldırıldı.")
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Kullanıcıya onay bildirimi gönderilemedi: {e}")
                     
             else:  # reject
                 response_text = f"❌ **İTİRAZ REDDEDİLDİ**\n\n" \
-                            f"**Kullanıcı:** {appealing_user.first_name} (`{user_id}`)\n" \
+                            f"**Kullanıcı:** {user_name} (`{user_id}`)\n" \
                             f"**Ceza Türü:** {action}\n" \
                             f"**Reddeden:** {event.sender.first_name}\n" \
                             f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -1393,17 +1521,18 @@ async def appeal_decision_handler(event):
                 # Kullanıcıya bildirim gönder
                 try:
                     await client.send_message(user_id, f"İtirazınız reddedildi ve {action} cezanız devam edecek.")
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Kullanıcıya red bildirimi gönderilemedi: {e}")
             
-            await event.edit(response_text)
+            # İtiraz mesajını güncelle
+            await event.edit(response_text, buttons=None)
             
         except Exception as e:
+            logger.error(f"İtiraz karar işleminde hata: {e}")
             await event.edit(f"İtiraz işlemi sırasında bir hata oluştu: {str(e)}")
     except Exception as e:
         logger.error(f"İtiraz değerlendirme buton işleyicisinde hata: {str(e)}")
         await event.answer("İşlem sırasında bir hata oluştu", alert=True)
-
 # YASAKLI KELİME VE BAĞLANTI FİLTRELEME
 
 # Yasaklı kelime ayarları
@@ -1520,7 +1649,7 @@ async def filter_messages(event):
                                 f"**Mesaj:** {text}\n" \
                                 f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                         
-                        await log_to_thread("forbidden_words", log_text, chat.id, None)
+                        await log_to_thread("forbidden_words", log_text, None, chat.id)
                         return
                     except:
                         pass
@@ -1556,7 +1685,7 @@ async def filter_messages(event):
                             f"**Mesaj:** {text}\n" \
                             f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     
-                    await log_to_thread("forbidden_words", log_text, chat.id, None)
+                    await log_to_thread("forbidden_words", log_text, None, chat.id)
                 except:
                     pass
     except Exception as e:
@@ -1685,7 +1814,6 @@ async def welcome_settings_handler(event):
         await event.answer("İşlem sırasında bir hata oluştu", alert=True)
 
 # Hoşgeldin mesajı gönderme
-# Hoşgeldin mesajı gönderme
 @client.on(events.ChatAction)
 async def welcome_new_users(event):
     try:
@@ -1703,7 +1831,7 @@ async def welcome_new_users(event):
                 f"**Kullanıcı:** {user.first_name} (`{user.id}`)\n" \
                 f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
-        await log_to_thread("join_leave", log_text, chat.id, None)
+        await log_to_thread("join_leave", log_text, None, chat.id)
         
         # Hoşgeldin mesajı etkinse gönder
         if "welcome_message" in config["groups"][chat_id_str] and config["groups"][chat_id_str]["welcome_message"]["enabled"]:
@@ -1753,13 +1881,12 @@ async def log_user_left(event):
                 f"**Eylem:** {'Atıldı' if event.user_kicked else 'Ayrıldı'}\n" \
                 f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
-        await log_to_thread("join_leave", log_text, chat.id, None)
+        await log_to_thread("join_leave", log_text, None, chat.id)
     except Exception as e:
         logger.error(f"Üye ayrılma loglamasında hata: {str(e)}")
 
 # TEKRARLANAN MESAJLAR
 
-# Tekrarlanan mesaj ayarları
 # Aralığı metin olarak biçimlendirmek için yardımcı fonksiyon
 def format_interval(seconds):
     if seconds < 60:
@@ -1769,7 +1896,7 @@ def format_interval(seconds):
     else:
         return f"{seconds // 3600} saat"
 
-# Tekrarlanan mesaj ayarları menüsünü güncelleyelim
+# Tekrarlanan mesaj ayarları menüsü
 @client.on(events.NewMessage(pattern=r'/tekrarlanmesaj'))
 async def repeated_messages_menu(event):
     if not await check_admin_permission(event, "edit_group"):
@@ -1853,7 +1980,7 @@ async def repeated_messages_menu(event):
     
     await event.respond(menu_text, buttons=buttons)
 
-# Varsayılan ayarlar için yeni buton işleyici
+# Varsayılan ayarlar için buton işleyici
 @client.on(events.CallbackQuery(pattern=r'repeated_default_settings_(-?\d+)'))
 async def repeated_default_settings_handler(event):
     try:
@@ -1894,7 +2021,7 @@ async def repeated_default_settings_handler(event):
         logger.error(f"Varsayılan ayarlar buton işleyicisinde hata: {str(e)}")
         await event.answer("İşlem sırasında bir hata oluştu", alert=True)
 
-# Varsayılan süre için yeni buton işleyici
+# Varsayılan süre için buton işleyici
 @client.on(events.CallbackQuery(pattern=r'repeated_set_default_interval_(-?\d+)'))
 async def repeated_default_interval_handler(event):
     try:
@@ -1970,7 +2097,34 @@ async def repeated_back_to_main_handler(event):
         logger.error(f"Ana menüye dönüş işleyicisinde hata: {str(e)}")
         await event.answer("İşlem sırasında bir hata oluştu", alert=True)
 
-# Mesaj ekleme işlevini güncelle
+# Tekrarlanan mesajları togle etme
+@client.on(events.CallbackQuery(pattern=r'repeated_toggle_(-?\d+)'))
+async def repeated_toggle_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "edit_group"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        chat_id_str = ensure_group_in_config(chat_id)
+        repeated_settings = config["groups"][chat_id_str]["repeated_messages"]
+        
+        # Durumu değiştir
+        repeated_settings["enabled"] = not repeated_settings["enabled"]
+        save_config(config)
+        
+        status = "aktif" if repeated_settings["enabled"] else "devre dışı"
+        await event.answer(f"Tekrarlanan mesajlar {status} olarak ayarlandı.")
+        
+        # Ana menüye dön
+        await repeated_messages_menu(event)
+        
+    except Exception as e:
+        logger.error(f"Tekrarlanan mesaj toggle işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Mesaj ekleme işlevi
 @client.on(events.CallbackQuery(pattern=r'repeated_add_message_(-?\d+)'))
 async def repeated_add_message_handler(event):
     try:
@@ -2502,6 +2656,7 @@ async def repeated_clear_buttons_handler(event):
         await event.answer("İşlem sırasında bir hata oluştu", alert=True)
 
 # Butonları temizleme onayı
+# Butonları temizleme onayı (kaldığı yerden devam)
 @client.on(events.CallbackQuery(pattern=r'repeated_confirm_clear_buttons_(-?\d+)'))
 async def repeated_confirm_clear_buttons_handler(event):
     try:
@@ -2526,7 +2681,7 @@ async def repeated_confirm_clear_buttons_handler(event):
         logger.error(f"Butonları temizleme onayı işleyicisinde hata: {str(e)}")
         await event.answer("İşlem sırasında bir hata oluştu", alert=True)
 
-# Tekrarlanan mesajları gönderme işlevini güncelle
+# Tekrarlanan mesajları gönderme işlevi
 async def send_repeated_messages():
     while True:
         try:
@@ -2599,7 +2754,7 @@ async def send_repeated_messages():
                                         f"**Mesaj:** {message_text[:100]}{'...' if len(message_text) > 100 else ''}\n" \
                                         f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                                 
-                                await log_to_thread("repeated_msgs", log_text, chat.id, None)
+                                await log_to_thread("repeated_msgs", log_text, None, chat_id)
                                 
                             except Exception as e:
                                 logger.error(f"Tekrarlanan mesaj gönderilirken hata oluştu: {e}")
@@ -2692,7 +2847,7 @@ async def grant_permission(event):
                     f"**Yetki:** {permission_names[permission_type]}\n" \
                     f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             
-            await log_to_thread("join_leave", log_text, chat.id, None)  # Özel bir log thread'i oluşturulabilir
+            await log_to_thread("join_leave", log_text, None, chat.id)  # Özel bir log thread'i oluşturulabilir
             
         except Exception as e:
             await event.respond(f"Bir hata oluştu: {str(e)}")
@@ -2781,7 +2936,7 @@ async def revoke_permission(event):
                     f"**Yetki:** {permission_names[permission_type]}\n" \
                     f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             
-            await log_to_thread("join_leave", log_text, chat.id, None)  # Özel bir log thread'i oluşturulabilir
+            await log_to_thread("join_leave", log_text, None, chat.id)  # Özel bir log thread'i oluşturulabilir
             
         except Exception as e:
             await event.respond(f"Bir hata oluştu: {str(e)}")
@@ -2939,292 +3094,155 @@ async def help_command(event):
 
 
 # Log ayarları komutu
-@client.on(events.NewMessage(pattern=r'/logayarlari'))
-async def log_settings_menu(event):
-    if not await check_admin_permission(event, "edit_group"):
-        await event.respond("Bu komutu kullanma yetkiniz yok.")
-        return
-    
-    chat = await event.get_chat()
-    chat_id_str = ensure_group_in_config(chat.id)
-    
-    # Eğer log ayarları yoksa varsayılanları ekle
-    if "log_settings" not in config["groups"][chat_id_str]:
-        config["groups"][chat_id_str]["log_settings"] = {
-            "enabled": False,
-            "log_channel_id": 0,
-            "thread_ids": {
-                "ban": 0,
-                "mute": 0,
-                "forbidden_words": 0,
-                "join_leave": 0,
-                "kicks": 0,
-                "warns": 0,
-                "voice_chats": 0,
-                "repeated_msgs": 0,
-                "appeals": 0,
-                "stats": 0
-            }
+# İtiraz işleme butonları - DÜZELTİLMİŞ VERSİYON
+@client.on(events.CallbackQuery(pattern=r'appeal_(ban|mute|kick|warn)_(\d+)'))
+async def appeal_button_handler(event):
+    try:
+        # Byte tipindeki match gruplarını stringe dönüştür
+        action = event.pattern_match.group(1).decode()
+        user_id = int(event.pattern_match.group(2).decode())
+        
+        if event.sender_id != user_id:
+            await event.answer("Bu butonu sadece ceza alan kullanıcı kullanabilir.", alert=True)
+            return
+        
+        # İşlemi onaylayarak kullanıcıya bilgi ver
+        await event.answer("İtirazınız işleniyor...", alert=True)
+        
+        # Ceza türünü belirle
+        action_names = {
+            "ban": "Ban",
+            "mute": "Susturma",
+            "kick": "Atılma",
+            "warn": "Uyarı"
         }
-        save_config(config)
-    
-    log_settings = config["groups"][chat_id_str]["log_settings"]
-    status = "Aktif ✅" if log_settings["enabled"] else "Devre Dışı ❌"
-    
-    # Ana menü butonları
-    toggle_button = Button.inline(
-        f"{'Kapat 🔴' if log_settings['enabled'] else 'Aç 🟢'}", 
-        data=f"log_toggle_{chat.id}"
-    )
-    set_channel_button = Button.inline("📊 Log Kanalı Ayarla", data=f"log_channel_{chat.id}")
-    thread_ids_button = Button.inline("🧵 Thread ID'leri Ayarla", data=f"log_threads_{chat.id}")
-    
-    buttons = [
-        [toggle_button],
-        [set_channel_button],
-        [thread_ids_button]
-    ]
-    
-    # Mevcut log kanalı bilgisini göster
-    channel_info = "Ayarlanmadı" if log_settings["log_channel_id"] == 0 else f"`{log_settings['log_channel_id']}`"
-    
-    menu_text = f"📝 **Log Ayarları**\n\n" \
-               f"**Durum:** {status}\n" \
-               f"**Log Kanalı:** {channel_info}\n\n" \
-               f"Log ayarlarını düzenlemek için butonları kullanın."
-    
-    await event.respond(menu_text, buttons=buttons)
-
-# Log ayarları durumunu değiştirme
-@client.on(events.CallbackQuery(pattern=r'log_toggle_(-?\d+)'))
-async def log_toggle_handler(event):
-    try:
-        chat_id = int(event.pattern_match.group(1).decode())
         
-        if not await check_admin_permission(event, "edit_group"):
-            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
-            return
+        # İtiraz eden kullanıcının bilgilerini al
+        try:
+            user = await client.get_entity(user_id)
+            user_name = f"{user.first_name} {user.last_name if user.last_name else ''}"
+        except Exception as e:
+            logger.error(f"Kullanıcı bilgisi alınamadı: {e}")
+            user_name = f"Kullanıcı (ID: {user_id})"
         
-        chat_id_str = ensure_group_in_config(chat_id)
-        log_settings = config["groups"][chat_id_str]["log_settings"]
+        # İtirazın hangi gruptan geldiğini ve kimin ceza uyguladığını bulalım
+        # Kullanıcıyı cezalandıran grubun ID'sini ve admin ID'sini bulmaya çalışalım
+        admin_id = None
+        admin_name = None
+        user_found_in_group = None
         
-        # Log kanalı ayarlanmamışsa uyarı ver
-        if log_settings["log_channel_id"] == 0 and not log_settings["enabled"]:
-            await event.answer("Önce bir log kanalı ayarlayın!", alert=True)
-            return
-            
-        # Durumu değiştir
-        log_settings["enabled"] = not log_settings["enabled"]
-        save_config(config)
+        # Tüm grup yapılandırmalarını kontrol et
+        for chat_id_str, group_data in config["groups"].items():
+            # Warn için yapılandırmaları kontrol et
+            if action == "warn" and "user_warnings" in group_data:
+                if str(user_id) in group_data["user_warnings"] and group_data["user_warnings"][str(user_id)]:
+                    user_found_in_group = chat_id_str
+                    # En son uyarıyı veren admin'i bul
+                    latest_warning = group_data["user_warnings"][str(user_id)][-1]
+                    if "admin_id" in latest_warning:
+                        admin_id = latest_warning["admin_id"]
+                    break
         
-        status = "aktif ✅" if log_settings["enabled"] else "devre dışı ❌"
-        await event.answer(f"Log sistemi {status} olarak ayarlandı.")
-        
-        # Menüyü güncelle
-        await log_settings_menu(event)
-        
-    except Exception as e:
-        logger.error(f"Log durumu değiştirirken hata: {str(e)}")
-        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
-
-# Log kanalı ayarlama
-@client.on(events.CallbackQuery(pattern=r'log_channel_(-?\d+)'))
-async def log_channel_handler(event):
-    try:
-        chat_id = int(event.pattern_match.group(1).decode())
-        
-        if not await check_admin_permission(event, "edit_group"):
-            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
-            return
-        
-        chat_id_str = ensure_group_in_config(chat_id)
-        
-        async with client.conversation(event.sender_id, timeout=300) as conv:
-            await event.answer()
-            await event.delete()
-            
-            await conv.send_message(
-                "Log kanalının ID'sini girin:\n\n"
-                "1. Bot'u log kanalına ekleyin\n"
-                "2. Log kanalında bir mesaj gönderin\n"
-                "3. Bu mesajı size iletilen bot mesajından alın\n"
-                "4. Buraya girin (örn. -1001234567890)"
-            )
-            
-            response = await conv.get_response()
+        # Eğer admin ID bulunduysa bilgileri al
+        if admin_id:
             try:
-                channel_id = int(response.text.strip())
+                admin = await client.get_entity(admin_id)
+                admin_name = f"{admin.first_name} {admin.last_name if admin.last_name else ''}"
+            except Exception as e:
+                logger.error(f"Admin bilgisi alınamadı: {e}")
+                admin_name = f"Yönetici (ID: {admin_id})"
+        
+        # İtiraz mesajını oluştur
+        log_text = f"🔍 **CEZA İTİRAZI**\n\n" \
+                  f"**Ceza Türü:** {action_names[action]}\n" \
+                  f"**Kullanıcı:** {user_name} (`{user_id}`)\n" \
+                  f"**İtiraz Eden:** {event.sender.first_name}\n"
+        
+        if admin_id:
+            log_text += f"**Cezayı Uygulayan:** {admin_name} (`{admin_id}`)\n"
+        
+        log_text += f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        
+        # İtiraz butonları
+        approve_button = Button.inline("✅ Onayla", data=f"appeal_approve_{action}_{user_id}")
+        reject_button = Button.inline("❌ Reddet", data=f"appeal_reject_{action}_{user_id}")
+        
+        buttons = [[approve_button, reject_button]]
+        
+        # İtiraz mesajını log kanalına veya admin'e gönder
+        appeal_sent = False
+        
+        # Önce grup özelinde log kanalı ve thread ID'si kontrol et
+        if user_found_in_group:
+            chat_id = int(user_found_in_group)
+            chat_id_str = str(chat_id)
+            
+            if "log_settings" in config["groups"][chat_id_str]:
+                log_settings = config["groups"][chat_id_str]["log_settings"]
                 
-                # Kanalı doğrula
+                if log_settings.get("enabled", False):
+                    log_channel_id = log_settings.get("log_channel_id", 0)
+                    appeals_thread_id = log_settings.get("thread_ids", {}).get("appeals", 0)
+                    
+                    # Log kanalı ve appeals thread varsa oraya gönder
+                    if log_channel_id and appeals_thread_id:
+                        try:
+                            await client.send_message(
+                                log_channel_id,
+                                log_text,
+                                buttons=buttons,
+                                reply_to=appeals_thread_id
+                            )
+                            appeal_sent = True
+                            logger.info(f"İtiraz mesajı grup özel log kanalına gönderildi: {log_channel_id}, thread: {appeals_thread_id}")
+                        except Exception as e:
+                            logger.error(f"Grup özel log kanalına itiraz gönderirken hata: {e}")
+        
+        # Grup özelinde log yoksa veya başarısız olduysa varsayılan log kanalını dene
+        if not appeal_sent:
+            appeals_thread_id = THREAD_IDS.get("appeals", 0)
+            if LOG_CHANNEL_ID and appeals_thread_id:
                 try:
-                    channel = await client.get_entity(channel_id)
-                    
-                    # Botun kanala mesaj gönderme yetkisini kontrol et
                     await client.send_message(
-                        channel_id,
-                        "✅ **Log Kanalı Kurulumu**\n\n"
-                        "Bu kanal artık log kanalı olarak ayarlandı.\n"
-                        "Bu mesaj, botun bu kanala mesaj gönderebilme yetkisini doğrulamak için gönderilmiştir."
+                        LOG_CHANNEL_ID,
+                        log_text,
+                        buttons=buttons,
+                        reply_to=appeals_thread_id
                     )
-                    
-                    # Kanalı ayarla
-                    config["groups"][chat_id_str]["log_settings"]["log_channel_id"] = channel_id
-                    save_config(config)
-                    
-                    await conv.send_message(f"Log kanalı başarıyla ayarlandı. Kanal: {channel.title}")
+                    appeal_sent = True
+                    logger.info(f"İtiraz mesajı varsayılan log kanalına gönderildi: {LOG_CHANNEL_ID}, thread: {appeals_thread_id}")
                 except Exception as e:
-                    await conv.send_message(f"Kanal ayarlanamadı: {str(e)}\nBot'un kanala eklendiğinden ve mesaj gönderme yetkisine sahip olduğundan emin olun.")
-            except ValueError:
-                await conv.send_message("Geçersiz kanal ID'si. Sayısal bir değer girin.")
-            
-            # Menüye dön
-            msg = await conv.send_message("Menüye dönülüyor...")
-            await log_settings_menu(await client.get_messages(conv.chat_id, ids=msg.id))
+                    logger.error(f"Varsayılan log kanalına itiraz gönderirken hata: {e}")
         
-    except Exception as e:
-        logger.error(f"Log kanalı ayarlanırken hata: {str(e)}")
-        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
-
-# Thread ID'leri ayarlama menüsü
-@client.on(events.CallbackQuery(pattern=r'log_threads_(-?\d+)'))
-async def log_threads_menu_handler(event):
-    try:
-        chat_id = int(event.pattern_match.group(1).decode())
+        # Log kanallarına gönderilemediyse ve admin ID varsa direkt admin'e gönder
+        if not appeal_sent and admin_id:
+            try:
+                await client.send_message(
+                    admin_id,
+                    f"⚠️ **YENİ İTİRAZ BİLDİRİMİ**\n\n{log_text}",
+                    buttons=buttons
+                )
+                appeal_sent = True
+                logger.info(f"İtiraz mesajı direkt cezayı uygulayan admin'e gönderildi: {admin_id}")
+            except Exception as e:
+                logger.error(f"Admin'e özel mesaj gönderirken hata: {e}")
         
-        if not await check_admin_permission(event, "edit_group"):
-            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
-            return
-        
-        chat_id_str = ensure_group_in_config(chat_id)
-        log_settings = config["groups"][chat_id_str]["log_settings"]
-        
-        # Log kanalı ayarlanmamışsa uyarı ver
-        if log_settings["log_channel_id"] == 0:
-            await event.answer("Önce bir log kanalı ayarlayın!", alert=True)
-            return
-        
-        # Thread türleri ve açıklamaları
-        thread_types = {
-            "ban": "Ban İşlemleri 🚫",
-            "mute": "Susturma İşlemleri 🔇",
-            "forbidden_words": "Yasaklı Kelimeler 🔤",
-            "join_leave": "Katılma/Ayrılma 👋",
-            "kicks": "Atma İşlemleri 👢",
-            "warns": "Uyarı İşlemleri ⚠️",
-            "voice_chats": "Sesli Sohbet 🎙️",
-            "repeated_msgs": "Tekrarlanan Mesajlar 🔄",
-            "appeals": "İtirazlar 🙋‍♂️",
-            "stats": "İstatistikler 📊"
-        }
-        
-        # Thread ayarlama butonları
-        buttons = []
-        for thread_type, description in thread_types.items():
-            current_id = log_settings["thread_ids"].get(thread_type, 0)
-            status = "✅" if current_id != 0 else "❌"
-            buttons.append([Button.inline(f"{description} {status}", data=f"log_set_thread_{chat_id}_{thread_type}")])
-        
-        # Geri dönüş butonu
-        buttons.append([Button.inline("⬅️ Geri", data=f"log_back_to_main_{chat_id}")])
-        
-        await event.edit("🧵 **Thread ID Ayarları**\n\nAyarlamak istediğiniz thread türünü seçin:", buttons=buttons)
-        
-    except Exception as e:
-        logger.error(f"Thread menüsü açılırken hata: {str(e)}")
-        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
-
-# Thread ID ayarlama
-@client.on(events.CallbackQuery(pattern=r'log_set_thread_(-?\d+)_(.+)'))
-async def log_set_thread_handler(event):
-    try:
-        chat_id = int(event.pattern_match.group(1).decode())
-        thread_type = event.pattern_match.group(2).decode()
-        
-        if not await check_admin_permission(event, "edit_group"):
-            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
-            return
-        
-        chat_id_str = ensure_group_in_config(chat_id)
-        
-        async with client.conversation(event.sender_id, timeout=300) as conv:
-            await event.answer()
-            await event.delete()
-            
-            thread_descriptions = {
-                "ban": "Ban İşlemleri 🚫",
-                "mute": "Susturma İşlemleri 🔇",
-                "forbidden_words": "Yasaklı Kelimeler 🔤",
-                "join_leave": "Katılma/Ayrılma 👋",
-                "kicks": "Atma İşlemleri 👢",
-                "warns": "Uyarı İşlemleri ⚠️",
-                "voice_chats": "Sesli Sohbet 🎙️",
-                "repeated_msgs": "Tekrarlanan Mesajlar 🔄",
-                "appeals": "İtirazlar 🙋‍♂️",
-                "stats": "İstatistikler 📊"
-            }
-            
-            description = thread_descriptions.get(thread_type, thread_type)
-            
-            await conv.send_message(
-                f"**{description}** için Thread ID'sini ayarlayın:\n\n"
-                "1. Log kanalında yeni bir konu başlatın\n"
-                "2. O konuya bir mesaj gönderin\n"
-                "3. Mesajı botunuza iletin\n"
-                "4. Thread ID'yi buraya yazın veya\n"
-                "5. Devre dışı bırakmak için 0 yazın"
+        # Kullanıcıya bilgi mesajı gönder
+        if appeal_sent:
+            await client.send_message(
+                user_id,
+                "İtirazınız yöneticilere iletildi. İncelendiğinde size bildirim yapılacak."
+            )
+        else:
+            await client.send_message(
+                user_id,
+                "İtirazınız iletilemedi. Lütfen bir yöneticiyle direkt iletişime geçin."
             )
             
-            response = await conv.get_response()
-            try:
-                thread_id = int(response.text.strip())
-                
-                # Thread ID'yi ayarla
-                config["groups"][chat_id_str]["log_settings"]["thread_ids"][thread_type] = thread_id
-                save_config(config)
-                
-                if thread_id == 0:
-                    await conv.send_message(f"**{description}** için thread devre dışı bırakıldı.")
-                else:
-                    # Thread'e test mesajı gönder
-                    try:
-                        channel_id = config["groups"][chat_id_str]["log_settings"]["log_channel_id"]
-                        await client.send_message(
-                            channel_id,
-                            f"✅ **Thread Testi**\n\nBu mesaj **{description}** thread'inin doğru çalıştığını kontrol etmek için gönderilmiştir.",
-                            reply_to=thread_id
-                        )
-                        await conv.send_message(f"**{description}** için thread ID başarıyla ayarlandı.")
-                    except Exception as e:
-                        await conv.send_message(f"Thread ID ayarlandı ancak test mesajı gönderilemedi: {str(e)}")
-            except ValueError:
-                await conv.send_message("Geçersiz Thread ID. Sayısal bir değer girin.")
-            
-            # Thread menüsüne dön
-            msg = await conv.send_message("Thread menüsüne dönülüyor...")
-            fake_event = await client.get_messages(conv.chat_id, ids=msg.id)
-            fake_event.pattern_match = re.match(r'log_threads_(-?\d+)', f"log_threads_{chat_id}")
-            await log_threads_menu_handler(fake_event)
-        
     except Exception as e:
-        logger.error(f"Thread ID ayarlanırken hata: {str(e)}")
+        logger.error(f"İtiraz buton işleyicisinde hata: {str(e)}")
         await event.answer("İşlem sırasında bir hata oluştu", alert=True)
 
-# Ana menüye dönüş
-@client.on(events.CallbackQuery(pattern=r'log_back_to_main_(-?\d+)'))
-async def log_back_to_main_handler(event):
-    try:
-        chat_id = int(event.pattern_match.group(1).decode())
-        
-        if not await check_admin_permission(event, "edit_group"):
-            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
-            return
-        
-        # Ana menüye dön
-        await log_settings_menu(event)
-        
-    except Exception as e:
-        logger.error(f"Ana menüye dönüş işleyicisinde hata: {str(e)}")
-        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
 # Ana fonksiyon
 async def main():
     load_stats()
