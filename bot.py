@@ -8,6 +8,7 @@ from telethon.tl.types import (
 )
 from telethon.errors import UserAdminInvalidError, ChatAdminRequiredError
 from datetime import datetime, timedelta
+from collections import defaultdict
 import asyncio
 import re
 import json
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 # API kimlik bilgileri
 API_ID = 28857104
 API_HASH = "c288d8be9f64e231b721c0b2f338b105"
-BOT_TOKEN = "8009298569:AAHf47bQQLBXz-rEPbXGHzu2u3gaCGWxHtk"
+BOT_TOKEN = "8065737316:AAFk6RBwAgHYKaNmhi8svJuqwGmDfRYQd3Q"
 LOG_CHANNEL_ID = -1002288700632
 
 # Varsayılan Thread ID'leri
@@ -44,7 +45,8 @@ THREAD_IDS = {
     "appeals": 0,
     "stats": 0,
 }
-
+# Kullanıcıların mesaj zamanlarını ve sayılarını izlemek için veri yapısı
+flood_data = defaultdict(lambda: defaultdict(list))
 # Yapılandırma dosya yolu
 CONFIG_FILE = 'bot_config.json'
 
@@ -117,9 +119,15 @@ def ensure_group_in_config(chat_id):
                     "voice_chats": 0,
                     "repeated_msgs": 0,
                     "appeals": 0,
-                    "stats": 0
+                    "stats": 0,
+                    "flood_warn": 0,    # Bunları ekleyin
+                    "flood_mute": 0,    # Bunları ekleyin
+                    "flood_kick": 0,    # Bunları ekleyin
+                    "flood_ban": 0,     # Bunları ekleyin
+                    "flood_delete": 0   # Bunları ekleyin
                 }
-            }
+            },
+            "flood_settings": DEFAULT_FLOOD_CONFIG.copy()  # Bu satırı ekleyin
         }
         save_config(config)
     return chat_id_str
@@ -445,14 +453,18 @@ async def ban_command(event):
             )
         ))
         
-        # İtiraz butonu oluştur
-        appeal_button = Button.inline("Bana İtiraz Et", data=f"appeal_ban_{user_id}")
+        # Admin'in ban sayısını güncelle ve al
+        ban_count = update_admin_action_count(chat.id, event.sender_id, "ban")
+        
+        # İtiraz butonu oluştur (daha önce değiştirdiğiniz gibi URL olarak)
+        appeal_button = Button.url("Bana İtiraz Et", "https://t.me/arayis_itiraz")
         
         # Ban'i logla
         log_text = f"🚫 **KULLANICI BANLANDI**\n\n" \
                   f"**Grup:** {chat.title} (`{chat.id}`)\n" \
                   f"**Kullanıcı:** {banned_user.first_name} (`{user_id}`)\n" \
                   f"**Yönetici:** {event.sender.first_name} (`{event.sender_id}`)\n" \
+                  f"**Yöneticinin Ban Sayısı:** {ban_count}\n" \
                   f"**Sebep:** {reason}\n" \
                   f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
@@ -616,8 +628,11 @@ async def mute_command(event):
             )
         ))
         
-        # İtiraz butonu oluştur
-        appeal_button = Button.inline("Susturmaya İtiraz Et", data=f"appeal_mute_{user_id}")
+        # Admin'in mute sayısını güncelle ve al
+        mute_count = update_admin_action_count(chat.id, event.sender_id, "mute")
+        
+        # İtiraz butonu oluştur (URL olarak)
+        appeal_button = Button.url("Susturmaya İtiraz Et", "https://t.me/arayis_itiraz")
         
         # Mute'u logla
         until_text = "süresiz" if not until_date else f"{until_date.strftime('%Y-%m-%d %H:%M:%S')} tarihine kadar"
@@ -625,6 +640,7 @@ async def mute_command(event):
                   f"**Grup:** {chat.title} (`{chat.id}`)\n" \
                   f"**Kullanıcı:** {muted_user.first_name} (`{user_id}`)\n" \
                   f"**Yönetici:** {event.sender.first_name} (`{event.sender_id}`)\n" \
+                  f"**Yöneticinin Mute Sayısı:** {mute_count}\n" \
                   f"**Süre:** {duration_text}\n" \
                   f"**Sebep:** {reason}\n" \
                   f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -745,7 +761,7 @@ async def kick_command(event):
                 return
     
     if not reason:
-        await event.respond("Lütfen atma sebebi belirtin.")
+        await event.respond("Lütfen atılma sebebi belirtin.")
         return
     
     reason = reason.strip()
@@ -773,23 +789,27 @@ async def kick_command(event):
             )
         ))
         
-        # İtiraz butonu oluştur
-        appeal_button = Button.inline("Atılmaya İtiraz Et", data=f"appeal_kick_{user_id}")
+        # Admin'in kick sayısını güncelle ve al
+        kick_count = update_admin_action_count(chat.id, event.sender_id, "kick")
+        
+        # İtiraz butonu oluştur (URL olarak)
+        appeal_button = Button.url("Atılmaya İtiraz Et", "https://t.me/arayis_itiraz")
         
         # Kick'i logla
         log_text = f"👢 **KULLANICI ATILDI**\n\n" \
                   f"**Grup:** {chat.title} (`{chat.id}`)\n" \
                   f"**Kullanıcı:** {kicked_user.first_name} (`{user_id}`)\n" \
                   f"**Yönetici:** {event.sender.first_name} (`{event.sender_id}`)\n" \
+                  f"**Yöneticinin Kick Sayısı:** {kick_count}\n" \
                   f"**Sebep:** {reason}\n" \
                   f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
         # Log kanalına log mesajı gönder (buttonsız)
-        await log_to_thread("kicks", log_text, None, chat.id)
+        await log_to_thread("kick", log_text, None, chat.id)
         
         # Gruba kick mesajı ve itiraz butonu gönder
         await event.respond(
-            f"Kullanıcı {kicked_user.first_name} şu sebepten gruptan atıldı: {reason}",
+            f"Kullanıcı {kicked_user.first_name} şu sebepten atıldı: {reason}",
             buttons=[[appeal_button]]
         )
     except UserAdminInvalidError:
@@ -862,7 +882,7 @@ async def warn_command(event):
         warned_user = await client.get_entity(user_id)
         
         # İtiraz butonu oluştur
-        appeal_button = Button.inline("Uyarıya İtiraz Et", data=f"appeal_warn_{user_id}")
+        appeal_button = Button.url("Bana İtiraz Et", "https://t.me/arayis_itiraz")
         
         # Uyarıyı logla
         log_text = f"⚠️ **KULLANICI UYARILDI**\n\n" \
@@ -1636,6 +1656,19 @@ async def forbidden_words_handler(event):
     except Exception as e:
         logger.error(f"Yasaklı kelime buton işleyicisinde hata: {str(e)}")
         await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+        
+# Anti-flood denetlemesi için event handler
+@client.on(events.NewMessage)
+async def flood_check_handler(event):
+    # İki veya daha fazla kelimesi olan mesajları daha az kontrol et
+    if len(event.raw_text.split()) > 2:
+        # Her mesajı kontrol etmek yerine, rastgele mesaj atla (performans için)
+        import random
+        if random.random() < 0.7:  # %70 ihtimalle bu mesajı kontrol etme
+            return
+    
+    # Flood kontrolü yap
+    await check_flood(event)
 
 # Mesaj filtreleme (yasaklı kelimeler ve bağlantılar)
 @client.on(events.NewMessage)
@@ -3015,7 +3048,376 @@ async def warn_settings_menu(event):
         f"**Eylem:** {action_text}",
         buttons=buttons
     )
+# Admin kontrolü için yardımcı fonksiyon
+async def is_admin(chat, user_id):
+    try:
+        participant = await client(GetParticipantRequest(channel=chat, participant=user_id))
+        return isinstance(participant.participant, (ChannelParticipantAdmin, ChannelParticipantCreator))
+    except:
+        return False
 
+# Anti-flood config ekleme
+def add_flood_config_to_group(chat_id):
+    """Bir gruba flood koruması yapılandırması ekle"""
+    chat_id_str = str(chat_id)
+    if chat_id_str not in config["groups"]:
+        config["groups"][chat_id_str] = {}
+    
+    if "flood_settings" not in config["groups"][chat_id_str]:
+        config["groups"][chat_id_str]["flood_settings"] = DEFAULT_FLOOD_CONFIG.copy()
+        save_config(config)
+    
+    return config["groups"][chat_id_str]["flood_settings"]
+
+# Anti-flood kontrolü
+async def check_flood(event):
+    """
+    Anti-flood kontrolü yapar, eğer kullanıcı flood yapıyorsa belirlenen eylemi uygular.
+    
+    :param event: Mesaj olayı
+    :return: True (flood algılandı), False (flood algılanmadı)
+    """
+    if event.is_private:
+        return False  # Özel mesajlarda flood kontrolü yapma
+    
+    # Grup ve kullanıcı ID'leri
+    chat_id = event.chat_id
+    chat_id_str = str(chat_id)
+    user_id = event.sender_id
+    
+    # Grup flood ayarlarını al, yoksa varsayılan ayarları ekle
+    if chat_id_str not in config["groups"] or "flood_settings" not in config["groups"][chat_id_str]:
+        flood_settings = add_flood_config_to_group(chat_id)
+    else:
+        flood_settings = config["groups"][chat_id_str]["flood_settings"]
+    
+    # Anti-flood devre dışı ise işlem yapma
+    if not flood_settings.get("enabled", False):
+        return False
+    
+    # Adminleri hariç tut seçeneği aktif ve kullanıcı admin ise, kontrol etme
+    if flood_settings.get("exclude_admins", True) and await is_admin(event.chat, user_id):
+        return False
+    
+    current_time = datetime.now()
+    # Son mesajların zamanlarını sakla
+    flood_data[chat_id][user_id].append(current_time)
+    
+    # Belirlenen süreden daha eski mesajları temizle
+    time_threshold = current_time - timedelta(seconds=flood_settings.get("seconds", 5))
+    flood_data[chat_id][user_id] = [t for t in flood_data[chat_id][user_id] if t > time_threshold]
+    
+    # Son belirli süre içindeki mesaj sayısını kontrol et
+    if len(flood_data[chat_id][user_id]) > flood_settings.get("messages", 5):
+        # Flood algılandı, ayarlara göre işlem yap
+        action = flood_settings.get("action", "mute")
+        
+        try:
+            # Kullanıcı bilgilerini al
+            flooder = await client.get_entity(user_id)
+            flooder_name = getattr(flooder, 'first_name', 'Bilinmeyen') + ((' ' + getattr(flooder, 'last_name', '')) if getattr(flooder, 'last_name', '') else '')
+            
+            # Grup bilgilerini al
+            chat = await client.get_entity(chat_id)
+            
+            # Log metni hazırla
+            log_text = f"⚠️ **FLOOD ALGILANDI**\n\n" \
+                       f"**Grup:** {chat.title} (`{chat.id}`)\n" \
+                       f"**Kullanıcı:** {flooder_name} (`{user_id}`)\n" \
+                       f"**Süre içindeki mesaj sayısı:** {len(flood_data[chat_id][user_id])}\n" \
+                       f"**Zaman aralığı:** {flood_settings.get('seconds', 5)} saniye\n" \
+                       f"**Uygulanan işlem:** {action.upper()}\n" \
+                       f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            
+            # Sadece uyarı seçeneği aktif ve admin değilse, uyarı gönder
+            if flood_settings.get("warn_only", False) and not await is_admin(event.chat, user_id):
+                await event.respond(f"⚠️ @{flooder.username if hasattr(flooder, 'username') and flooder.username else user_id} Lütfen flood yapmayın!")
+                
+                # Log kanalına gönder
+                if flood_settings.get("log_to_channel", True):
+                    await log_to_thread("flood_warn", log_text, None, chat_id)
+                
+                return True
+                
+            # Action'a göre işlem yap
+            if action.lower() == "mute":
+                # Mute işlemi
+                mute_time = flood_settings.get("mute_time", 5)  # Dakika cinsinden
+                until_date = datetime.now() + timedelta(minutes=mute_time)
+                
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(
+                        until_date=until_date,
+                        send_messages=True,
+                        send_media=True,
+                        send_stickers=True,
+                        send_gifs=True,
+                        send_games=True,
+                        send_inline=True,
+                        embed_links=True
+                    )
+                ))
+                
+                # İtiraz butonu (önceki değişikliklerdeki gibi)
+                appeal_button = Button.url("Susturmaya İtiraz Et", "https://t.me/arayis_itiraz")
+                
+                # Admin'in mute sayısını güncelle ve al
+                mute_count = update_admin_action_count(chat_id, event.sender_id, "mute")
+                
+                # Gruba flood uyarısı gönder
+                await event.respond(
+                    f"⚠️ Kullanıcı {flooder_name} flood yapmaktan dolayı {mute_time} dakika susturuldu.",
+                    buttons=[[appeal_button]]
+                )
+                
+                # Log kanalına gönder
+                if flood_settings.get("log_to_channel", True):
+                    await log_to_thread("flood_mute", log_text, None, chat_id)
+                
+            elif action.lower() == "kick":
+                # Kullanıcıyı kickle
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(until_date=None, view_messages=True)
+                ))
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(until_date=None, view_messages=False)
+                ))
+                
+                # İtiraz butonu
+                appeal_button = Button.url("Atılmaya İtiraz Et", "https://t.me/arayis_itiraz")
+                
+                # Admin'in kick sayısını güncelle ve al
+                kick_count = update_admin_action_count(chat_id, event.sender_id, "kick")
+                
+                # Gruba flood uyarısı gönder
+                await event.respond(
+                    f"⚠️ Kullanıcı {flooder_name} flood yapmaktan dolayı gruptan atıldı.",
+                    buttons=[[appeal_button]]
+                )
+                
+                # Log kanalına gönder
+                if flood_settings.get("log_to_channel", True):
+                    await log_to_thread("flood_kick", log_text, None, chat_id)
+                
+            elif action.lower() == "ban":
+                # Kullanıcıyı banla
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(
+                        until_date=None,
+                        view_messages=True,
+                        send_messages=True,
+                        send_media=True,
+                        send_stickers=True,
+                        send_gifs=True,
+                        send_games=True,
+                        send_inline=True,
+                        embed_links=True
+                    )
+                ))
+                
+                # İtiraz butonu
+                appeal_button = Button.url("Bana İtiraz Et", "https://t.me/arayis_itiraz")
+                
+                # Admin'in ban sayısını güncelle ve al
+                ban_count = update_admin_action_count(chat_id, event.sender_id, "ban")
+                
+                # Gruba flood uyarısı gönder
+                await event.respond(
+                    f"⚠️ Kullanıcı {flooder_name} flood yapmaktan dolayı gruptan banlandı.",
+                    buttons=[[appeal_button]]
+                )
+                
+                # Log kanalına gönder
+                if flood_settings.get("log_to_channel", True):
+                    await log_to_thread("flood_ban", log_text, None, chat_id)
+                
+            elif action.lower() == "warn":
+                # Admin'in warn sayısını güncelle ve al
+                warn_count = update_admin_action_count(chat_id, event.sender_id, "warn")
+                
+                # Kullanıcıyı uyar (mevcut warn sisteminizi kullanın)
+                await warn_user(event, user_id, "Flood yapmak")
+                
+                # Log kanalına gönder
+                if flood_settings.get("log_to_channel", True):
+                    await log_to_thread("flood_warn_system", log_text, None, chat_id)
+                
+            elif action.lower() == "delete":
+                # Sadece mesajı sil
+                await event.delete()
+                
+                # Log kanalına gönder
+                if flood_settings.get("log_to_channel", True):
+                    await log_to_thread("flood_delete", log_text, None, chat_id)
+                
+            return True
+                
+        except Exception as e:
+            logger.error(f"Anti-flood işlemi sırasında hata: {str(e)}")
+            return False
+    
+    return False
+
+# Anti-flood ayarlarını değiştirmek için komut
+@client.on(events.NewMessage(pattern=r'/setflood(?:@\w+)?(?:\s+(.+))?'))
+async def set_flood_command(event):
+    if not await check_admin_permission(event, "edit_group"):
+        await event.respond("Bu komutu kullanma yetkiniz yok.")
+        return
+    
+    args = event.pattern_match.group(1)
+    
+    if not args:
+        # Yardım mesajı göster
+        await event.respond(
+            "**Anti-Flood Ayarları**\n\n"
+            "Kullanım: `/setflood AYAR DEĞER`\n\n"
+            "Mevcut ayarlar:\n"
+            "- `status` (on/off): Anti-flood sistemini aç/kapa\n"
+            "- `messages` (sayı): Zaman aralığında izin verilen mesaj sayısı\n"
+            "- `seconds` (sayı): Mesajların izleneceği zaman aralığı (saniye)\n"
+            "- `action` (mute/kick/ban/warn/delete): Flood algılandığında yapılacak eylem\n"
+            "- `mute_time` (sayı): Mute edilecekse kaç dakika süreyle\n"
+            "- `exclude_admins` (yes/no): Yöneticileri anti-flood'dan muaf tut\n"
+            "- `warn_only` (yes/no): Sadece uyarı ver, işlem yapma\n"
+            "- `log` (yes/no): Anti-flood olaylarını log kanalına bildir\n\n"
+            "Örnek: `/setflood messages 7` - 7 mesaj limitiyle anti-flood ayarla"
+        )
+        return
+    
+    # Grup ID'sini al
+    chat_id = event.chat_id
+    chat_id_str = str(chat_id)
+    
+    # Argümanları böl: /setflood ayar değer
+    parts = args.strip().split()
+    if len(parts) < 2:
+        await event.respond("Hata: Yeterli argüman sağlanmadı. Kullanım: `/setflood AYAR DEĞER`")
+        return
+    
+    setting = parts[0].lower()
+    value = parts[1].lower()
+    
+    # Flood ayarlarını al veya oluştur
+    if chat_id_str not in config["groups"] or "flood_settings" not in config["groups"][chat_id_str]:
+        flood_settings = add_flood_config_to_group(chat_id)
+    else:
+        flood_settings = config["groups"][chat_id_str]["flood_settings"]
+    
+    response = ""
+    
+    try:
+        if setting == "status":
+            if value in ["on", "yes", "true", "1"]:
+                flood_settings["enabled"] = True
+                response = "✅ Anti-flood sistemi açıldı."
+            elif value in ["off", "no", "false", "0"]:
+                flood_settings["enabled"] = False
+                response = "❌ Anti-flood sistemi kapatıldı."
+            else:
+                response = "⚠️ Geçersiz değer. 'on' veya 'off' kullanın."
+        
+        elif setting == "messages":
+            try:
+                msg_count = int(value)
+                if msg_count > 0:
+                    flood_settings["messages"] = msg_count
+                    response = f"✅ Flood mesaj limiti {msg_count} olarak ayarlandı."
+                else:
+                    response = "⚠️ Mesaj sayısı pozitif bir sayı olmalıdır."
+            except ValueError:
+                response = "⚠️ Geçersiz sayısal değer."
+        
+        elif setting == "seconds":
+            try:
+                seconds = int(value)
+                if seconds > 0:
+                    flood_settings["seconds"] = seconds
+                    response = f"✅ Flood zaman aralığı {seconds} saniye olarak ayarlandı."
+                else:
+                    response = "⚠️ Saniye değeri pozitif bir sayı olmalıdır."
+            except ValueError:
+                response = "⚠️ Geçersiz sayısal değer."
+        
+        elif setting == "action":
+            if value in ["mute", "kick", "ban", "warn", "delete"]:
+                flood_settings["action"] = value
+                response = f"✅ Flood eylemi {value.upper()} olarak ayarlandı."
+            else:
+                response = "⚠️ Geçersiz eylem. 'mute', 'kick', 'ban', 'warn' veya 'delete' kullanın."
+        
+        elif setting == "mute_time":
+            try:
+                mute_time = int(value)
+                if mute_time > 0:
+                    flood_settings["mute_time"] = mute_time
+                    response = f"✅ Flood mute süresi {mute_time} dakika olarak ayarlandı."
+                else:
+                    response = "⚠️ Mute süresi pozitif bir sayı olmalıdır."
+            except ValueError:
+                response = "⚠️ Geçersiz sayısal değer."
+        
+        elif setting == "exclude_admins":
+            if value in ["yes", "true", "1", "on"]:
+                flood_settings["exclude_admins"] = True
+                response = "✅ Yöneticiler anti-flood kontrolünden muaf tutulacak."
+            elif value in ["no", "false", "0", "off"]:
+                flood_settings["exclude_admins"] = False
+                response = "❌ Yöneticiler anti-flood kontrolüne dahil edilecek."
+            else:
+                response = "⚠️ Geçersiz değer. 'yes' veya 'no' kullanın."
+        
+        elif setting == "warn_only":
+            if value in ["yes", "true", "1", "on"]:
+                flood_settings["warn_only"] = True
+                response = "✅ Flood durumunda sadece uyarı verilecek."
+            elif value in ["no", "false", "0", "off"]:
+                flood_settings["warn_only"] = False
+                response = "❌ Flood durumunda belirlenen eylem uygulanacak."
+            else:
+                response = "⚠️ Geçersiz değer. 'yes' veya 'no' kullanın."
+        
+        elif setting == "log":
+            if value in ["yes", "true", "1", "on"]:
+                flood_settings["log_to_channel"] = True
+                response = "✅ Flood olayları log kanalına bildirilecek."
+            elif value in ["no", "false", "0", "off"]:
+                flood_settings["log_to_channel"] = False
+                response = "❌ Flood olayları log kanalına bildirilmeyecek."
+            else:
+                response = "⚠️ Geçersiz değer. 'yes' veya 'no' kullanın."
+        
+        else:
+            response = f"⚠️ Bilinmeyen ayar: '{setting}'"
+        
+        # Değişiklikleri kaydet
+        config["groups"][chat_id_str]["flood_settings"] = flood_settings
+        save_config(config)
+        
+        # Mevcut ayarları göster
+        current_settings = f"**Mevcut Anti-Flood Ayarları:**\n" \
+                          f"- Status: {'ON' if flood_settings.get('enabled', False) else 'OFF'}\n" \
+                          f"- Messages: {flood_settings.get('messages', 5)}\n" \
+                          f"- Seconds: {flood_settings.get('seconds', 5)}\n" \
+                          f"- Action: {flood_settings.get('action', 'mute').upper()}\n" \
+                          f"- Mute Time: {flood_settings.get('mute_time', 5)} dakika\n" \
+                          f"- Exclude Admins: {'YES' if flood_settings.get('exclude_admins', True) else 'NO'}\n" \
+                          f"- Warn Only: {'YES' if flood_settings.get('warn_only', False) else 'NO'}\n" \
+                          f"- Log to Channel: {'YES' if flood_settings.get('log_to_channel', True) else 'NO'}"
+        
+        await event.respond(f"{response}\n\n{current_settings}")
+        
+    except Exception as e:
+        await event.respond(f"⚠️ Ayar değiştirilirken bir hata oluştu: {str(e)}")
+        logger.error(f"Anti-flood ayarları değiştirilirken hata: {str(e)}")
 # Uyarı ayarları menü işleyicileri
 @client.on(events.CallbackQuery(pattern=r'warn_(max|action|duration)_(-?\d+)'))
 async def warn_settings_handler(event):
@@ -3104,7 +3506,7 @@ async def help_command(event):
 /amsj - Tekrarlanan mesaj ayarları
 /wset - Uyarı sistemi ayarları
 /log - Log kanalı ve thread ayarları
-
+/setflood - Anti-flood ayarları
 
 **👮‍♂️ Yönetici Komutları:**
 /promote <kullanıcı> <yetki> - Kullanıcıya özel yetki verir
@@ -3558,139 +3960,309 @@ async def appeal_button_handler(event):
         action = event.pattern_match.group(1).decode()
         user_id = int(event.pattern_match.group(2).decode())
         
-        if event.sender_id != user_id:
-            await event.answer("Bu butonu sadece ceza alan kullanıcı kullanabilir.", alert=True)
-            return
+        # Kullanıcıya bilgi ver
+        await event.answer()
         
-        # İşlemi onaylayarak kullanıcıya bilgi ver
-        await event.answer("İtirazınız işleniyor...", alert=True)
-        
-        # İtiraz eden kullanıcının bilgilerini al
         try:
-            user = await client.get_entity(user_id)
-            user_name = f"{user.first_name} {user.last_name if user.last_name else ''}"
+            # Mesajı al ve butonları tamamen değiştir
+            original_message = await event.get_message()
+            
+            # Ban/Mute/Kick/Warn itiraz butonunu yeni bir URL butonu ile değiştir
+            new_text = original_message.text + "\n\n⚠️ İtiraz sistemi: @arayis_itiraz"
+            
+            # Sadece URL butonu olan yeni bir buton dizisi oluştur
+            new_buttons = [Button.url("🔍 @arayis_itiraz", "https://t.me/arayis_itiraz")]
+            
+            # Mesajı ve butonları güncelle
+            await original_message.edit(
+                text=new_text,
+                buttons=new_buttons
+            )
         except Exception as e:
-            logger.error(f"Kullanıcı bilgisi alınamadı: {e}")
-            user_name = f"Kullanıcı (ID: {user_id})"
+            logger.error(f"Mesaj düzenleme hatası: {e}")
         
-        # İtirazın hangi gruptan geldiğini bulmaya çalışalım
-        # Not: Bu mesajın gönderildiği sohbeti kullanmamız daha doğru olur
-        group_id = None
+        # Eğer DM varsa, DM üzerinden de buton gönder
         try:
-            chat = await event.get_chat()
-            if not chat.id == user_id:  # Eğer özel sohbet değilse
-                group_id = chat.id
+            # Kullanıcıya DM üzerinden buton göndermeyi dene
+            await client.send_message(
+                user_id,
+                f"İtiraz için doğrudan @arayis_itiraz ile iletişime geçebilirsiniz:",
+                buttons=[Button.url("@arayis_itiraz", "https://t.me/arayis_itiraz")]
+            )
         except Exception as e:
-            logger.error(f"Chat bilgisi alınamadı: {e}")
-        
-        # İtiraz mesajını oluştur
-        action_names = {
-            "ban": "Ban",
-            "mute": "Susturma",
-            "kick": "Atılma",
-            "warn": "Uyarı"
-        }
-        
-        log_text = f"🔍 **CEZA İTİRAZI**\n\n" \
-                  f"**Ceza Türü:** {action_names[action]}\n" \
-                  f"**Kullanıcı:** {user_name} (`{user_id}`)\n" \
-                  f"**İtiraz Eden:** {event.sender.first_name}\n" \
-                  f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        
-        # İtiraz butonları
-        approve_button = Button.inline("✅ Onayla", data=f"appeal_approve_{action}_{user_id}")
-        reject_button = Button.inline("❌ Reddet", data=f"appeal_reject_{action}_{user_id}")
-        
-        buttons = [[approve_button, reject_button]]
-        
-        # İtirazı nereye göndereceğimizi belirleyelim
-        appeal_sent = False
-        
-        # Eğer grup ID'si biliniyorsa, öncelikle o grubun log ayarlarını deneyelim
-        if group_id:
-            group_id_str = str(group_id)
-            if group_id_str in config["groups"] and "log_settings" in config["groups"][group_id_str]:
-                log_settings = config["groups"][group_id_str]["log_settings"]
-                
-                if log_settings.get("enabled", False):
-                    log_channel_id = log_settings.get("log_channel_id", 0)
-                    appeals_thread_id = log_settings.get("thread_ids", {}).get("appeals", 0)
-                    
-                    if log_channel_id and appeals_thread_id:
-                        try:
-                            await client.send_message(
-                                log_channel_id,
-                                log_text,
-                                buttons=buttons,
-                                reply_to=appeals_thread_id
-                            )
-                            appeal_sent = True
-                            logger.info(f"İtiraz mesajı grup özel log kanalına gönderildi: {log_channel_id}, thread: {appeals_thread_id}")
-                        except Exception as e:
-                            logger.error(f"Grup özel log kanalına itiraz gönderirken hata: {e}")
-        
-        # Grup özel log kanalına gönderilemezse, diğer grupları deneyelim
-        if not appeal_sent:
-            # Kullanıcının bulunabileceği tüm grupları kontrol et
-            for chat_id_str, group_data in config["groups"].items():
-                if "log_settings" in group_data:
-                    log_settings = group_data["log_settings"]
-                    
-                    if log_settings.get("enabled", False):
-                        log_channel_id = log_settings.get("log_channel_id", 0)
-                        appeals_thread_id = log_settings.get("thread_ids", {}).get("appeals", 0)
-                        
-                        if log_channel_id and appeals_thread_id:
-                            try:
-                                await client.send_message(
-                                    log_channel_id,
-                                    log_text,
-                                    buttons=buttons,
-                                    reply_to=appeals_thread_id
-                                )
-                                appeal_sent = True
-                                logger.info(f"İtiraz mesajı başka bir grubun log kanalına gönderildi: {log_channel_id}, thread: {appeals_thread_id}")
-                                break  # Başarıyla gönderildiyse diğerlerini deneme
-                            except Exception as e:
-                                logger.error(f"Başka grubun log kanalına itiraz gönderirken hata: {e}")
-        
-        # Hiçbir grup log kanalına gönderilemezse varsayılan log kanalını dene
-        if not appeal_sent:
-            appeals_thread_id = THREAD_IDS.get("appeals", 0)
-            if LOG_CHANNEL_ID and appeals_thread_id:
-                try:
-                    await client.send_message(
-                        LOG_CHANNEL_ID,
-                        log_text,
-                        buttons=buttons,
-                        reply_to=appeals_thread_id
-                    )
-                    appeal_sent = True
-                    logger.info(f"İtiraz mesajı varsayılan log kanalına gönderildi: {LOG_CHANNEL_ID}, thread: {appeals_thread_id}")
-                except Exception as e:
-                    logger.error(f"Varsayılan log kanalına itiraz gönderirken hata: {e}")
-        
-        # Kullanıcıya bilgi mesajı gönder
-        try:
-            if appeal_sent:
-                await client.send_message(
-                    user_id,
-                    "İtirazınız yöneticilere iletildi. İncelendiğinde size bildirim yapılacak."
-                )
-            else:
-                await client.send_message(
-                    user_id,
-                    "İtirazınız iletilemedi. Lütfen bir yöneticiyle direkt iletişime geçin."
-                )
-        except Exception as e:
-            logger.error(f"Kullanıcıya bilgi mesajı gönderilemedi: {e}")
+            logger.error(f"DM üzerinden buton gönderilirken hata: {e}")
+            pass  # DM yoksa veya hata olursa bu adımı atla
             
     except Exception as e:
         logger.error(f"İtiraz buton işleyicisinde hata: {str(e)}")
         await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+        
+# Admin işlem sayısını takip etme ve güncelleme fonksiyonu
+def update_admin_action_count(chat_id, admin_id, action_type):
+    """
+    Admin işlem sayısını günceller ve yeni sayıyı döndürür
+    
+    :param chat_id: İşlemin gerçekleştiği grup ID'si
+    :param admin_id: İşlemi yapan admin ID'si
+    :param action_type: İşlemin türü ('ban', 'mute', 'kick' vb.)
+    :return: Güncellenmiş işlem sayısı
+    """
+    chat_id_str = str(chat_id)
+    admin_id_str = str(admin_id)
+    
+    # Admin_actions anahtarı yoksa oluştur
+    if "admin_actions" not in config:
+        config["admin_actions"] = {}
+    
+    # Grup yoksa oluştur
+    if chat_id_str not in config["admin_actions"]:
+        config["admin_actions"][chat_id_str] = {}
+    
+    # Admin yoksa oluştur
+    if admin_id_str not in config["admin_actions"][chat_id_str]:
+        config["admin_actions"][chat_id_str][admin_id_str] = {}
+    
+    # İşlem türü yoksa oluştur
+    if action_type not in config["admin_actions"][chat_id_str][admin_id_str]:
+        config["admin_actions"][chat_id_str][admin_id_str][action_type] = 0
+    
+    # İşlem sayısını 1 artır
+    config["admin_actions"][chat_id_str][admin_id_str][action_type] += 1
+    
+    # Yapılandırmayı kaydet
+    save_config(config)
+    
+    # Güncellenen işlem sayısını döndür
+    return config["admin_actions"][chat_id_str][admin_id_str][action_type]
+    
+# Anti-flood sistemi için gerekli eklemeler
+
+from collections import defaultdict
+from datetime import datetime, timedelta
+import asyncio
+
+# Kullanıcıların mesaj zamanlarını ve sayılarını izlemek için veri yapısı
+flood_data = defaultdict(lambda: defaultdict(list))
+
+# Anti-flood sistemi için varsayılan yapılandırma
+DEFAULT_FLOOD_CONFIG = {
+    "enabled": False,           # Anti-flood varsayılan olarak kapalı
+    "messages": 5,              # Zaman aralığında izin verilen maksimum mesaj sayısı
+    "seconds": 5,               # Mesajların izleneceği zaman aralığı (saniye)
+    "action": "mute",           # Flood algılandığında yapılacak eylem (mute, kick, ban, warn, delete)
+    "mute_time": 5,             # Mute edilecekse kaç dakika süreyle
+    "exclude_admins": True,     # Yöneticileri anti-flood'dan muaf tut
+    "warn_only": False,         # Sadece uyarı ver, herhangi bir işlem yapma
+    "log_to_channel": True      # Anti-flood olaylarını log kanalında bildir
+}
+
+# Anti-flood config ekleme
+def add_flood_config_to_group(chat_id):
+    """Bir gruba flood koruması yapılandırması ekle"""
+    chat_id_str = str(chat_id)
+    if chat_id_str not in config["groups"]:
+        config["groups"][chat_id_str] = {}
+    
+    if "flood_settings" not in config["groups"][chat_id_str]:
+        config["groups"][chat_id_str]["flood_settings"] = DEFAULT_FLOOD_CONFIG.copy()
+        save_config(config)
+    
+    return config["groups"][chat_id_str]["flood_settings"]
+
+# Anti-flood kontrolü
+async def check_flood(event):
+    """
+    Anti-flood kontrolü yapar, eğer kullanıcı flood yapıyorsa belirlenen eylemi uygular.
+    
+    :param event: Mesaj olayı
+    :return: True (flood algılandı), False (flood algılanmadı)
+    """
+    if event.is_private:
+        return False  # Özel mesajlarda flood kontrolü yapma
+    
+    # Grup ve kullanıcı ID'leri
+    chat_id = event.chat_id
+    chat_id_str = str(chat_id)
+    user_id = event.sender_id
+    
+    # Grup flood ayarlarını al, yoksa varsayılan ayarları ekle
+    if chat_id_str not in config["groups"] or "flood_settings" not in config["groups"][chat_id_str]:
+        flood_settings = add_flood_config_to_group(chat_id)
+    else:
+        flood_settings = config["groups"][chat_id_str]["flood_settings"]
+    
+    # Anti-flood devre dışı ise işlem yapma
+    if not flood_settings.get("enabled", False):
+        return False
+    
+    # Adminleri hariç tut seçeneği aktif ve kullanıcı admin ise, kontrol etme
+    if flood_settings.get("exclude_admins", True) and await is_admin(event.chat, user_id):
+        return False
+    
+    current_time = datetime.now()
+    # Son mesajların zamanlarını sakla
+    flood_data[chat_id][user_id].append(current_time)
+    
+    # Belirlenen süreden daha eski mesajları temizle
+    time_threshold = current_time - timedelta(seconds=flood_settings.get("seconds", 5))
+    flood_data[chat_id][user_id] = [t for t in flood_data[chat_id][user_id] if t > time_threshold]
+    
+    # Son belirli süre içindeki mesaj sayısını kontrol et
+    if len(flood_data[chat_id][user_id]) > flood_settings.get("messages", 5):
+        # Flood algılandı, ayarlara göre işlem yap
+        action = flood_settings.get("action", "mute")
+        
+        try:
+            # Kullanıcı bilgilerini al
+            flooder = await client.get_entity(user_id)
+            flooder_name = getattr(flooder, 'first_name', 'Bilinmeyen') + ((' ' + getattr(flooder, 'last_name', '')) if getattr(flooder, 'last_name', '') else '')
+            
+            # Grup bilgilerini al
+            chat = await client.get_entity(chat_id)
+            
+            # Log metni hazırla
+            log_text = f"⚠️ **FLOOD ALGILANDI**\n\n" \
+                       f"**Grup:** {chat.title} (`{chat.id}`)\n" \
+                       f"**Kullanıcı:** {flooder_name} (`{user_id}`)\n" \
+                       f"**Süre içindeki mesaj sayısı:** {len(flood_data[chat_id][user_id])}\n" \
+                       f"**Zaman aralığı:** {flood_settings.get('seconds', 5)} saniye\n" \
+                       f"**Uygulanan işlem:** {action.upper()}\n" \
+                       f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            
+            # Sadece uyarı seçeneği aktif ve admin değilse, uyarı gönder
+            if flood_settings.get("warn_only", False) and not await is_admin(event.chat, user_id):
+                await event.respond(f"⚠️ @{flooder.username if hasattr(flooder, 'username') and flooder.username else user_id} Lütfen flood yapmayın!")
+                
+                # Log kanalına gönder
+                if flood_settings.get("log_to_channel", True):
+                    await log_to_thread("flood_warn", log_text, None, chat_id)
+                
+                return True
+                
+            # Action'a göre işlem yap
+            if action.lower() == "mute":
+                # Mute işlemi
+                mute_time = flood_settings.get("mute_time", 5)  # Dakika cinsinden
+                until_date = datetime.now() + timedelta(minutes=mute_time)
+                
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(
+                        until_date=until_date,
+                        send_messages=True,
+                        send_media=True,
+                        send_stickers=True,
+                        send_gifs=True,
+                        send_games=True,
+                        send_inline=True,
+                        embed_links=True
+                    )
+                ))
+                
+                # İtiraz butonu (önceki değişikliklerdeki gibi)
+                appeal_button = Button.url("Susturmaya İtiraz Et", "https://t.me/arayis_itiraz")
+                
+                # Gruba flood uyarısı gönder
+                await event.respond(
+                    f"⚠️ Kullanıcı {flooder_name} flood yapmaktan dolayı {mute_time} dakika susturuldu.",
+                    buttons=[[appeal_button]]
+                )
+                
+                # Log kanalına gönder
+                if flood_settings.get("log_to_channel", True):
+                    await log_to_thread("flood_mute", log_text, None, chat_id)
+                
+            elif action.lower() == "kick":
+                # Kullanıcıyı kickle
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(until_date=None, view_messages=True)
+                ))
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(until_date=None, view_messages=False)
+                ))
+                
+                # İtiraz butonu
+                appeal_button = Button.url("Atılmaya İtiraz Et", "https://t.me/arayis_itiraz")
+                
+                # Gruba flood uyarısı gönder
+                await event.respond(
+                    f"⚠️ Kullanıcı {flooder_name} flood yapmaktan dolayı gruptan atıldı.",
+                    buttons=[[appeal_button]]
+                )
+                
+                # Log kanalına gönder
+                if flood_settings.get("log_to_channel", True):
+                    await log_to_thread("flood_kick", log_text, None, chat_id)
+                
+            elif action.lower() == "ban":
+                # Kullanıcıyı banla
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(
+                        until_date=None,
+                        view_messages=True,
+                        send_messages=True,
+                        send_media=True,
+                        send_stickers=True,
+                        send_gifs=True,
+                        send_games=True,
+                        send_inline=True,
+                        embed_links=True
+                    )
+                ))
+                
+                # İtiraz butonu
+                appeal_button = Button.url("Bana İtiraz Et", "https://t.me/arayis_itiraz")
+                
+                # Gruba flood uyarısı gönder
+                await event.respond(
+                    f"⚠️ Kullanıcı {flooder_name} flood yapmaktan dolayı gruptan banlandı.",
+                    buttons=[[appeal_button]]
+                )
+                
+                # Log kanalına gönder
+                if flood_settings.get("log_to_channel", True):
+                    await log_to_thread("flood_ban", log_text, None, chat_id)
+                
+            elif action.lower() == "warn":
+                # Kullanıcıyı uyar
+                await warn_user(event, user_id, "Flood yapmak")
+                
+                # Log kanalına gönder
+                if flood_settings.get("log_to_channel", True):
+                    await log_to_thread("flood_warn_system", log_text, None, chat_id)
+                
+            elif action.lower() == "delete":
+                # Sadece mesajı sil
+                await event.delete()
+                
+                # Log kanalına gönder
+                if flood_settings.get("log_to_channel", True):
+                    await log_to_thread("flood_delete", log_text, None, chat_id)
+                
+            return True
+                
+        except Exception as e:
+            logger.error(f"Anti-flood işlemi sırasında hata: {str(e)}")
+            return False
+    
+    return False
+
 # Ana fonksiyon
 async def main():
     load_stats()
+    # Anti-flood ayarlarını başlat
+    for chat_id_str in config["groups"]:
+        # Anti-flood ayarı yoksa ekle
+        if "flood_settings" not in config["groups"][chat_id_str]:
+            config["groups"][chat_id_str]["flood_settings"] = DEFAULT_FLOOD_CONFIG.copy()
+    
     # Tekrarlanan mesajlar için arka plan görevi
     asyncio.create_task(send_repeated_messages())
     asyncio.create_task(send_daily_report())
