@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # API kimlik bilgileri
 API_ID = 28857104
 API_HASH = "c288d8be9f64e231b721c0b2f338b105"
-BOT_TOKEN = "8065737316:AAFk6RBwAgHYKaNmhi8svJuqwGmDfRYQd3Q"
+BOT_TOKEN = "7810435982:AAEZkg7NP-GwC0GYJ4nTICdZnKYHzfSJ_Fs"
 LOG_CHANNEL_ID = -1002288700632
 
 # Varsayılan Thread ID'leri
@@ -397,6 +397,7 @@ user_messages = {}
 
 # Ban komutu
 # Ban komutu
+# Ban komutu
 @client.on(events.NewMessage(pattern=r'/ban(?:@\w+)?(\s+(?:@\w+|\d+))?(\s+.+)?'))
 async def ban_command(event):
     if not await check_admin_permission(event, "ban"):
@@ -471,6 +472,20 @@ async def ban_command(event):
         # Log kanalına log mesajı gönder (buttonsız)
         await log_to_thread("ban", log_text, None, chat.id)
         
+        # Ban işlemi yapıldıktan sonra kullanıcıyı banned_users listesine ekle
+        if "banned_users" not in config:
+            config["banned_users"] = {}
+        if str(chat.id) not in config["banned_users"]:
+            config["banned_users"][str(chat.id)] = {}
+
+        config["banned_users"][str(chat.id)][str(user_id)] = {
+            "time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "reason": reason,
+            "admin_id": event.sender_id,
+            "user_name": banned_user.first_name
+        }
+        save_config(config)
+        
         # Gruba ban mesajı ve itiraz butonu gönder
         await event.respond(
             f"Kullanıcı {banned_user.first_name} şu sebepten banlandı: {reason}", 
@@ -481,6 +496,7 @@ async def ban_command(event):
     except Exception as e:
         await event.respond(f"Bir hata oluştu: {str(e)}")
 
+# Unban komutu
 # Unban komutu
 @client.on(events.NewMessage(pattern=r'/unban(?:@\w+)?(\s+(?:@\w+|\d+))?(\s+.+)?'))
 async def unban_command(event):
@@ -548,10 +564,16 @@ async def unban_command(event):
         
         await log_to_thread("ban", log_text, None, chat.id)
         
+        # Kullanıcıyı banned_users listesinden çıkar
+        if "banned_users" in config and str(chat.id) in config["banned_users"] and str(user_id) in config["banned_users"][str(chat.id)]:
+            del config["banned_users"][str(chat.id)][str(user_id)]
+            save_config(config)
+        
         await event.respond(f"Kullanıcı {unbanned_user.first_name} ban kaldırıldı. Sebep: {reason}")
     except Exception as e:
         await event.respond(f"Bir hata oluştu: {str(e)}")
 
+# Mute komutu
 # Mute komutu
 @client.on(events.NewMessage(pattern=r'/mute(?:@\w+)?(\s+(?:@\w+|\d+))?(\s+(\d+)([dhm]))?(\s+.+)?'))
 async def mute_command(event):
@@ -608,8 +630,8 @@ async def mute_command(event):
             duration_text = f"{duration} dakika"
     else:
         # Varsayılan: 1 gün sustur
-        until_date = datetime.now() + timedelta(days=1)
-        duration_text = "1 gün"
+        until_date = datetime.now() + timedelta(days=999)
+        
     
     try:
         muted_user = await client.get_entity(user_id)
@@ -648,6 +670,21 @@ async def mute_command(event):
         # Log kanalına log mesajı gönder (buttonsız)
         await log_to_thread("mute", log_text, None, chat.id)
         
+        # Mute işlemi yapıldıktan sonra kullanıcıyı muted_users listesine ekle
+        if "muted_users" not in config:
+            config["muted_users"] = {}
+        if str(chat.id) not in config["muted_users"]:
+            config["muted_users"][str(chat.id)] = {}
+
+        config["muted_users"][str(chat.id)][str(user_id)] = {
+            "time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "reason": reason,
+            "admin_id": event.sender_id,
+            "user_name": muted_user.first_name,
+            "until_date": until_date.strftime('%Y-%m-%d %H:%M:%S') if until_date else "Süresiz"
+        }
+        save_config(config)
+        
         # Gruba mute mesajı ve itiraz butonu gönder
         await event.respond(
             f"Kullanıcı {muted_user.first_name} {duration_text} boyunca şu sebepten susturuldu: {reason}",
@@ -658,6 +695,7 @@ async def mute_command(event):
     except Exception as e:
         await event.respond(f"Bir hata oluştu: {str(e)}")
 
+# Unmute komutu
 # Unmute komutu
 @client.on(events.NewMessage(pattern=r'/unmute(?:@\w+)?(\s+(?:@\w+|\d+))?(\s+.+)?'))
 async def unmute_command(event):
@@ -723,6 +761,11 @@ async def unmute_command(event):
                   f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
         await log_to_thread("mute", log_text, None, chat.id)
+        
+        # Kullanıcıyı muted_users listesinden çıkar
+        if "muted_users" in config and str(chat.id) in config["muted_users"] and str(user_id) in config["muted_users"][str(chat.id)]:
+            del config["muted_users"][str(chat.id)][str(user_id)]
+            save_config(config)
         
         await event.respond(f"Kullanıcı {unmuted_user.first_name} susturması kaldırıldı. Sebep: {reason}")
     except Exception as e:
@@ -1051,8 +1094,49 @@ async def unwarn_command(event):
         
     except Exception as e:
         await event.respond(f"Bir hata oluştu: {str(e)}")
+        
+# Kullanıcının gruba attığı mesaj sayısını sayan fonksiyon
+# Kullanıcının gruba attığı mesaj sayısını sayan fonksiyon
+async def count_user_messages(chat_id, user_id):
+    """
+    Belirli bir kullanıcının belirli bir gruptaki toplam mesaj sayısını sayar.
+    
+    Args:
+        chat_id: Grubun ID'si
+        user_id: Kullanıcının ID'si
+        
+    Returns:
+        int/str: Kullanıcının toplam mesaj sayısı
+    """
+    try:
+        # Telethon API kullanarak mesaj sayısını al
+        count = 0
+        # Güncel tarih ve sınır belirle (son 30 gün gibi)
+        today = datetime.now()
+        limit_date = today - timedelta(days=30)  # Son 30 gündeki mesajları say
+        
+        # Mesajları sorgula ve say
+        async for message in client.iter_messages(
+            entity=chat_id,
+            from_user=user_id,
+            offset_date=limit_date,
+            reverse=True
+        ):
+            count += 1
+            # 100'den fazla mesajı saymayı durdur (performans için)
+            if count >= 100:
+                count = str(count) + "+"
+                break
+                
+        return count
+    except Exception as e:
+        logger.error(f"Mesaj sayımı sırasında hata: {e}")
+        return "Hesaplanamadı"
 
 # Kullanıcı bilgisi komutu
+# Kullanıcı bilgisi komutu - geliştirilmiş versiyon
+# Düzeltilmiş tam çalışan kullanıcı bilgisi komutu
+# Düzeltilmiş tam çalışan kullanıcı bilgisi komutu
 @client.on(events.NewMessage(pattern=r'/info(?:@\w+)?(\s+(?:@\w+|\d+))?'))
 async def info_command(event):
     args = event.pattern_match.group(1)
@@ -1080,7 +1164,8 @@ async def info_command(event):
                 return
     
     chat = await event.get_chat()
-    chat_id_str = ensure_group_in_config(chat.id)
+    chat_id = chat.id  # Chat ID'yi tanımla
+    chat_id_str = ensure_group_in_config(chat_id)
     
     try:
         user = await client.get_entity(user_id)
@@ -1090,11 +1175,17 @@ async def info_command(event):
         try:
             participant = await client(GetParticipantRequest(chat, user_id))
             join_date = participant.participant.date.strftime('%Y-%m-%d %H:%M:%S')
-        except:
-            pass
-        
-        # Kullanıcının mesaj sayısını al (bu örnek için varsayılan bir değer)
-        message_count = "Bilinmiyor"
+            
+            # Kullanıcının yetkilerini kontrol et
+            user_status = "Üye"
+            if isinstance(participant.participant, ChannelParticipantAdmin):
+                user_status = "Yönetici"
+            elif isinstance(participant.participant, ChannelParticipantCreator):
+                user_status = "Grup Kurucusu"
+        except Exception as e:
+            logger.error(f"Katılım tarihi alınırken hata: {e}")
+            join_date = "Bilinmiyor"
+            user_status = "Bilinmiyor/Grupta Değil"
         
         # Kullanıcının uyarı sayısını al
         warn_count = 0
@@ -1102,30 +1193,504 @@ async def info_command(event):
             if str(user_id) in config["groups"][chat_id_str]["user_warnings"]:
                 warn_count = len(config["groups"][chat_id_str]["user_warnings"][str(user_id)])
         
+        # Kullanıcının mevcut cezaları kontrol edilir
+        current_restrictions = "Yok"
+        try:
+            # Kullanıcı katılımcı bilgilerini al
+            participant = await client(GetParticipantRequest(chat, user_id))
+            
+            # Eğer kısıtlama varsa
+            if hasattr(participant.participant, 'banned_rights'):
+                banned_rights = participant.participant.banned_rights
+                
+                if banned_rights.view_messages:
+                    current_restrictions = "⛔️ Banlanmış"
+                elif banned_rights.send_messages:
+                    if banned_rights.until_date and banned_rights.until_date > datetime.now():
+                        # Kalan süreyi hesapla
+                        remaining_time = banned_rights.until_date - datetime.now()
+                        hours, remainder = divmod(remaining_time.total_seconds(), 3600)
+                        minutes, _ = divmod(remainder, 60)
+                        current_restrictions = f"🔇 Susturulmuş ({int(hours)} saat, {int(minutes)} dakika kaldı)"
+                    else:
+                        current_restrictions = "🔇 Susturulmuş"
+        except Exception as e:
+            logger.debug(f"Kısıtlama kontrolünde hata: {e}")
+            
         # Kullanıcı bilgisini hazırla
-        user_info = f"👤 **KULLANICI BİLGİSİ**\n\n" \
-                   f"**İsim:** {user.first_name}" + (f" {user.last_name}" if user.last_name else "") + "\n" \
-                   f"**Kullanıcı Adı:** @{user.username}\n" if user.username else "" \
-                   f"**ID:** `{user_id}`\n" \
-                   f"**Gruba Katılma:** {join_date}\n" \
-                   f"**Mesaj Sayısı:** {message_count}\n" \
-                   f"**Uyarı Sayısı:** {warn_count}"
+        user_info = f"👤 **KULLANICI BİLGİSİ**\n\n"
+        user_info += f"**İsim:** {user.first_name}"
         
-        # Yönetim butonlarını hazırla
-        ban_button = Button.inline("🚫 Ban", data=f"action_ban_{user_id}")
-        mute_button = Button.inline("🔇 Sustur", data=f"action_mute_{user_id}")
-        kick_button = Button.inline("👢 At", data=f"action_kick_{user_id}")
-        warn_button = Button.inline("⚠️ Uyar", data=f"action_warn_{user_id}")
+        if user.last_name:
+            user_info += f" {user.last_name}"
         
-        buttons = [
-            [ban_button, mute_button],
-            [kick_button, warn_button]
-        ]
+        user_info += "\n"
         
-        await event.respond(user_info, buttons=buttons)
+        if user.username:
+            user_info += f"**Kullanıcı Adı:** @{user.username}\n"
+        
+        # Kalan bilgileri ekle
+        user_info += f"**ID:** `{user_id}`\n"
+        user_info += f"**Durum:** {user_status}\n"
+        user_info += f"**Gruba Katılma:** {join_date}\n"
+        
+        # Mesaj sayımı gerçekleştirelim
+        message_count = await count_user_messages(chat_id, user_id)
+        
+        user_info += f"**Uyarı Sayısı:** {warn_count}\n"
+        user_info += f"**Mevcut Cezalar:** {current_restrictions}\n\n"
+        user_info += f"**Yönetim İşlemleri:**"
+        
+        # Yönetim butonlarını adminler için hazırla
+        buttons = []
+        if await check_admin_permission(event, "ban"):
+            ban_button = Button.inline("🚫 Ban", data=f"direct_action_ban_{user_id}")
+            unban_button = Button.inline("✅ Unban", data=f"direct_action_unban_{user_id}")
+            buttons.append([ban_button, unban_button])
+            
+        if await check_admin_permission(event, "mute"):
+            mute_button = Button.inline("🔇 Mute", data=f"direct_action_mute_{user_id}")
+            unmute_button = Button.inline("🔊 Unmute", data=f"direct_action_unmute_{user_id}")
+            buttons.append([mute_button, unmute_button])
+            
+        if await check_admin_permission(event, "kick"):
+            kick_button = Button.inline("👢 Kick", data=f"direct_action_kick_{user_id}")
+            buttons.append([kick_button])
+            
+        if await check_admin_permission(event, "warn"):
+            warn_button = Button.inline("⚠️ Warn", data=f"direct_action_warn_{user_id}")
+            unwarn_button = Button.inline("🔄 Unwarn", data=f"direct_action_unwarn_{user_id}")
+            buttons.append([warn_button, unwarn_button])
+        
+        # Eğer hiçbir yetki yoksa, boş mesaj göster
+        if not buttons:
+            user_info += "\n⚠️ Yönetim işlemleri için yetkiniz yok."
+            await event.respond(user_info)
+        else:
+            await event.respond(user_info, buttons=buttons)
     except Exception as e:
-        await event.respond(f"Bir hata oluştu: {str(e)}")
+        await event.respond(f"Kullanıcı bilgisi alınırken hata oluştu: {str(e)}")
+        
+        
+# Direkt işlem butonları için handler
+@client.on(events.CallbackQuery(pattern=r'direct_action_(ban|unban|mute|unmute|kick|warn|unwarn)_(\d+)'))
+async def direct_action_handler(event):
+    try:
+        # Byte tipindeki match gruplarını stringe dönüştür
+        action = event.pattern_match.group(1).decode()
+        user_id = int(event.pattern_match.group(2).decode())
+        
+        # İlgili yetki kontrolü
+        if action in ["ban", "unban"]:
+            permission_type = "ban"
+        elif action in ["mute", "unmute"]:
+            permission_type = "mute"
+        elif action == "kick":
+            permission_type = "kick"
+        elif action in ["warn", "unwarn"]:
+            permission_type = "warn"
+        else:
+            permission_type = action
+            
+        # Yetki kontrolü
+        if not await check_admin_permission(event, permission_type):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        # İşlem onayını göster
+        await event.answer(f"{action.capitalize()} işlemi gerçekleştiriliyor...")
+        
+        # Gruptan bilgileri al
+        chat = await event.get_chat()
+        chat_id = chat.id
+        
+        # İşlemi yapacak kullanıcı bilgileri
+        admin = await event.get_sender()
+        
+        # Hedef kullanıcı bilgileri
+        try:
+            target_user = await client.get_entity(user_id)
+            target_name = f"{target_user.first_name} {target_user.last_name if target_user.last_name else ''}"
+        except:
+            target_name = f"ID: {user_id}"
+        
+        # Standart sebep metni
+        reason = f"Yönetici tarafından {action} butonuyla"
+        
+        # İşleme göre işlem yap
+        if action == "ban":
+            try:
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(
+                        until_date=None,
+                        view_messages=True,
+                        send_messages=True,
+                        send_media=True,
+                        send_stickers=True,
+                        send_gifs=True,
+                        send_games=True,
+                        send_inline=True,
+                        embed_links=True
+                    )
+                ))
+                
+                # Ban işlemini logla
+                log_text = f"🚫 **KULLANICI BANLANDI**\n\n" \
+                          f"**Grup:** {chat.title} (`{chat.id}`)\n" \
+                          f"**Kullanıcı:** {target_name} (`{user_id}`)\n" \
+                          f"**Yönetici:** {admin.first_name} (`{admin.id}`)\n" \
+                          f"**Sebep:** {reason}\n" \
+                          f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                
+                await log_to_thread("ban", log_text, None, chat.id)
+                
+                # Bildirim mesajı
+                notification = f"✅ Kullanıcı {target_name} başarıyla banlandı"
+                
+            except Exception as e:
+                notification = f"❌ Ban işlemi sırasında hata: {str(e)}"
+        
+        elif action == "unban":
+            try:
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(
+                        until_date=None,
+                        view_messages=False,
+                        send_messages=False,
+                        send_media=False,
+                        send_stickers=False,
+                        send_gifs=False,
+                        send_games=False,
+                        send_inline=False,
+                        embed_links=False
+                    )
+                ))
+                
+                # Unban işlemini logla
+                log_text = f"✅ **KULLANICI BANI KALDIRILDI**\n\n" \
+                          f"**Grup:** {chat.title} (`{chat.id}`)\n" \
+                          f"**Kullanıcı:** {target_name} (`{user_id}`)\n" \
+                          f"**Yönetici:** {admin.first_name} (`{admin.id}`)\n" \
+                          f"**Sebep:** {reason}\n" \
+                          f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                
+                await log_to_thread("ban", log_text, None, chat.id)
+                
+                # Bildirim mesajı
+                notification = f"✅ Kullanıcı {target_name} banı kaldırıldı"
+                
+            except Exception as e:
+                notification = f"❌ Ban kaldırma işlemi sırasında hata: {str(e)}"
+                
+        elif action == "mute":
+            try:
+                # Varsayılan: 1 saat mute
+                until_date = datetime.now() + timedelta(hours=1)
+                
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(
+                        until_date=until_date,
+                        send_messages=True,
+                        send_media=True,
+                        send_stickers=True,
+                        send_gifs=True,
+                        send_games=True,
+                        send_inline=True,
+                        embed_links=True
+                    )
+                ))
+                
+                # Mute işlemini logla
+                log_text = f"🔇 **KULLANICI SUSTURULDU**\n\n" \
+                          f"**Grup:** {chat.title} (`{chat.id}`)\n" \
+                          f"**Kullanıcı:** {target_name} (`{user_id}`)\n" \
+                          f"**Yönetici:** {admin.first_name} (`{admin.id}`)\n" \
+                          f"**Süre:** 1 saat\n" \
+                          f"**Sebep:** {reason}\n" \
+                          f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                
+                await log_to_thread("mute", log_text, None, chat.id)
+                
+                # Bildirim mesajı
+                notification = f"✅ Kullanıcı {target_name} 1 saat susturuldu"
+                
+            except Exception as e:
+                notification = f"❌ Mute işlemi sırasında hata: {str(e)}"
+                
+        elif action == "unmute":
+            try:
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(
+                        until_date=None,
+                        send_messages=False,
+                        send_media=False,
+                        send_stickers=False,
+                        send_gifs=False,
+                        send_games=False,
+                        send_inline=False,
+                        embed_links=False
+                    )
+                ))
+                
+                # Unmute işlemini logla
+                log_text = f"🔊 **KULLANICI SUSTURMASI KALDIRILDI**\n\n" \
+                          f"**Grup:** {chat.title} (`{chat.id}`)\n" \
+                          f"**Kullanıcı:** {target_name} (`{user_id}`)\n" \
+                          f"**Yönetici:** {admin.first_name} (`{admin.id}`)\n" \
+                          f"**Sebep:** {reason}\n" \
+                          f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                
+                await log_to_thread("mute", log_text, None, chat.id)
+                
+                # Bildirim mesajı
+                notification = f"✅ Kullanıcı {target_name} susturması kaldırıldı"
+                
+            except Exception as e:
+                notification = f"❌ Unmute işlemi sırasında hata: {str(e)}"
+                
+        elif action == "kick":
+            try:
+                # Kullanıcıyı at ve sonra yasağı kaldır
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(
+                        until_date=None,
+                        view_messages=True
+                    )
+                ))
+                
+                await client(EditBannedRequest(
+                    chat_id,
+                    user_id,
+                    ChatBannedRights(
+                        until_date=None,
+                        view_messages=False
+                    )
+                ))
+                
+                # Kick işlemini logla
+                log_text = f"👢 **KULLANICI ATILDI**\n\n" \
+                          f"**Grup:** {chat.title} (`{chat.id}`)\n" \
+                          f"**Kullanıcı:** {target_name} (`{user_id}`)\n" \
+                          f"**Yönetici:** {admin.first_name} (`{admin.id}`)\n" \
+                          f"**Sebep:** {reason}\n" \
+                          f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                
+                await log_to_thread("kicks", log_text, None, chat.id)
+                
+                # Bildirim mesajı
+                notification = f"✅ Kullanıcı {target_name} gruptan atıldı"
+                
+            except Exception as e:
+                notification = f"❌ Kick işlemi sırasında hata: {str(e)}"
+                
+        elif action == "warn":
+            try:
+                # İşlem için chat_id_str tanımlanmalı
+                chat_id_str = str(chat_id)
+                
+                # Eğer grubun uyarı ayarı yoksa, varsayılan uyarı ayarı kullan
+                if "user_warnings" not in config["groups"][chat_id_str]:
+                    config["groups"][chat_id_str]["user_warnings"] = {}
+                
+                # Eğer kullanıcının uyarı kaydı yoksa oluştur
+                user_id_str = str(user_id)
+                if user_id_str not in config["groups"][chat_id_str]["user_warnings"]:
+                    config["groups"][chat_id_str]["user_warnings"][user_id_str] = []
+                
+                # Yeni uyarı ekle
+                warning = {
+                    "reason": reason,
+                    "admin_id": admin.id,
+                    "time": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                config["groups"][chat_id_str]["user_warnings"][user_id_str].append(warning)
+                save_config(config)
+                
+                # Uyarı sayısını kontrol et
+                warn_count = len(config["groups"][chat_id_str]["user_warnings"][user_id_str])
+                warn_settings = config["groups"][chat_id_str]["warn_settings"]
+                
+                # Uyarı işlemini logla
+                log_text = f"⚠️ **KULLANICI UYARILDI**\n\n" \
+                          f"**Grup:** {chat.title} (`{chat.id}`)\n" \
+                          f"**Kullanıcı:** {target_name} (`{user_id}`)\n" \
+                          f"**Yönetici:** {admin.first_name} (`{admin.id}`)\n" \
+                          f"**Sebep:** {reason}\n" \
+                          f"**Uyarı Sayısı:** {warn_count}/{warn_settings['max_warns']}\n" \
+                          f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                
+                await log_to_thread("warns", log_text, None, chat.id)
+                
+                # Bildirim mesajı
+                notification = f"✅ Kullanıcı {target_name} uyarıldı. Uyarı sayısı: {warn_count}/{warn_settings['max_warns']}"
+                
+                # Maksimum uyarı sayısına ulaşıldıysa ceza uygula
+                if warn_count >= warn_settings['max_warns']:
+                    if warn_settings['action'] == 'ban':
+                        await client(EditBannedRequest(
+                            chat_id,
+                            user_id,
+                            ChatBannedRights(
+                                until_date=None,
+                                view_messages=True,
+                                send_messages=True,
+                                send_media=True,
+                                send_stickers=True,
+                                send_gifs=True,
+                                send_games=True,
+                                send_inline=True,
+                                embed_links=True
+                            )
+                        ))
+                        
+                        notification += f"\n⚠️ Kullanıcı maksimum uyarı sayısına ulaştığı için banlandı!"
+                        
+                        # Ban'i logla
+                        log_text = f"🚫 **KULLANICI UYARILAR NEDENİYLE BANLANDI**\n\n" \
+                                  f"**Grup:** {chat.title} (`{chat.id}`)\n" \
+                                  f"**Kullanıcı:** {target_name} (`{user_id}`)\n" \
+                                  f"**Yönetici:** {admin.first_name} (`{admin.id}`)\n" \
+                                  f"**Uyarı Sayısı:** {warn_count}/{warn_settings['max_warns']}\n" \
+                                  f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        
+                        await log_to_thread("ban", log_text, None, chat.id)
+                        
+                    elif warn_settings['action'] == 'mute':
+                        mute_duration = warn_settings.get('mute_duration', 24)  # Saat cinsinden
+                        until_date = datetime.now() + timedelta(hours=mute_duration)
+                        
+                        await client(EditBannedRequest(
+                            chat_id,
+                            user_id,
+                            ChatBannedRights(
+                                until_date=until_date,
+                                send_messages=True,
+                                send_media=True,
+                                send_stickers=True,
+                                send_gifs=True,
+                                send_games=True,
+                                send_inline=True,
+                                embed_links=True
+                            )
+                        ))
+                        
+                        notification += f"\n⚠️ Kullanıcı maksimum uyarı sayısına ulaştığı için {mute_duration} saat susturuldu!"
+                        
+                        # Mute'u logla
+                        log_text = f"🔇 **KULLANICI UYARILAR NEDENİYLE SUSTURULDU**\n\n" \
+                                  f"**Grup:** {chat.title} (`{chat.id}`)\n" \
+                                  f"**Kullanıcı:** {target_name} (`{user_id}`)\n" \
+                                  f"**Yönetici:** {admin.first_name} (`{admin.id}`)\n" \
+                                  f"**Süre:** {mute_duration} saat\n" \
+                                  f"**Uyarı Sayısı:** {warn_count}/{warn_settings['max_warns']}\n" \
+                                  f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        
+                        await log_to_thread("mute", log_text, None, chat.id)
+                    
+                    # Uyarı sayısını sıfırla
+                    config["groups"][chat_id_str]["user_warnings"][user_id_str] = []
+                    save_config(config)
+                
+            except Exception as e:
+                notification = f"❌ Warn işlemi sırasında hata: {str(e)}"
+                
+        elif action == "unwarn":
+            try:
+                # İşlem için chat_id_str tanımlanmalı
+                chat_id_str = str(chat_id)
+                user_id_str = str(user_id)
+                
+                # Kullanıcının uyarıları var mı kontrol et
+                if "user_warnings" not in config["groups"][chat_id_str] or \
+                   user_id_str not in config["groups"][chat_id_str]["user_warnings"] or \
+                   not config["groups"][chat_id_str]["user_warnings"][user_id_str]:
+                    notification = "⚠️ Bu kullanıcının hiç uyarısı yok."
+                    await event.edit(notification)
+                    return
+                
+                # Son uyarıyı kaldır
+                removed_warning = config["groups"][chat_id_str]["user_warnings"][user_id_str].pop()
+                save_config(config)
+                
+                # Kalan uyarı sayısı
+                warn_count = len(config["groups"][chat_id_str]["user_warnings"][user_id_str])
+                warn_settings = config["groups"][chat_id_str]["warn_settings"]
+                
+                # Uyarı kaldırmayı logla
+                log_text = f"⚠️ **KULLANICI UYARISI KALDIRILDI**\n\n" \
+                          f"**Grup:** {chat.title} (`{chat.id}`)\n" \
+                          f"**Kullanıcı:** {target_name} (`{user_id}`)\n" \
+                          f"**Yönetici:** {admin.first_name} (`{admin.id}`)\n" \
+                          f"**Sebep:** {reason}\n" \
+                          f"**Kalan Uyarı Sayısı:** {warn_count}/{warn_settings['max_warns']}\n" \
+                          f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                
+                await log_to_thread("warns", log_text, None, chat.id)
+                
+                # Bildirim mesajı
+                notification = f"✅ Kullanıcı {target_name} bir uyarısı kaldırıldı. Kalan uyarı sayısı: {warn_count}/{warn_settings['max_warns']}"
+                
+            except Exception as e:
+                notification = f"❌ Unwarn işlemi sırasında hata: {str(e)}"
+        
+        # İşlem sonucunu göster
+        await event.edit(notification)
+        
+        # Kullanıcı bilgilerini güncellenmiş şekilde gösterme
+        if not event.is_private:
+            # Biraz bekleyip bilgileri yenile
+            await asyncio.sleep(1)
+            # Yeni info komutu çalıştır
+            command_message = await event.get_message()
+            if command_message:
+                info_command_text = f"/info {user_id}"
+                await client.send_message(event.chat_id, info_command_text)
+        
+    except Exception as e:
+        logger.error(f"Direkt işlem butonunda hata: {str(e)}")
+        await event.answer(f"İşlem sırasında bir hata oluştu: {str(e)}", alert=True)
 
+# Kullanıcı mesaj istatistiklerini takip etme (track_messages fonksiyonuna güncelleştir)
+# Kullanıcı mesaj istatistiklerini takip etme (track_messages fonksiyonuna güncelleştir)
+@client.on(events.NewMessage)
+async def track_messages(event):
+    if not event.is_private and event.message:
+        # Mevcut kod, günlük istatistikleri artırmak
+        increment_stat("messages", event.chat_id)
+        
+        # Kullanıcının bu gruptaki toplam mesaj sayısını artırmak için (yeni)
+        try:
+            chat_id_str = str(event.chat_id)
+            user_id_str = str(event.sender_id)
+            
+            # Grup user_stats alanını kontrol et/oluştur
+            if "user_stats" not in config["groups"][chat_id_str]:
+                config["groups"][chat_id_str]["user_stats"] = {}
+            
+            # Kullanıcı alanını kontrol et/oluştur  
+            if user_id_str not in config["groups"][chat_id_str]["user_stats"]:
+                config["groups"][chat_id_str]["user_stats"][user_id_str] = {"messages": 0, "last_active": 0}
+            
+            # Mesaj sayısını artır
+            config["groups"][chat_id_str]["user_stats"][user_id_str]["messages"] += 1
+            # Son aktif zamanı güncelle
+            config["groups"][chat_id_str]["user_stats"][user_id_str]["last_active"] = int(time.time())
+            
+            # Her 10 mesajda bir kaydet (performans optimizasyonu)
+            if config["groups"][chat_id_str]["user_stats"][user_id_str]["messages"] % 10 == 0:
+                save_config(config)
+        except Exception as e:
+            logger.error(f"Kullanıcı mesaj istatistiği güncelleme hatası: {e}")
 # BUTON İŞLEYİCİLERİ
 # Basit günlük istatistik özelliği
 
@@ -1671,6 +2236,7 @@ async def flood_check_handler(event):
     await check_flood(event)
 
 # Mesaj filtreleme (yasaklı kelimeler ve bağlantılar)
+# Mesaj filtreleme (yasaklı kelimeler ve bağlantılar)
 @client.on(events.NewMessage)
 async def filter_messages(event):
     # Özel mesajları kontrol etme
@@ -1715,26 +2281,34 @@ async def filter_messages(event):
                     except:
                         pass
         
-        # Bağlantı kontrolü
+        # Sadece bağlantı kontrolü (mention kontrolü kaldırıldı)
         if not is_admin:
             # Telegram bağlantıları ve web bağlantıları kontrol et
             has_link = False
+            link_type = None
+            link_value = None
             
             # Metin içinde URL kontrolü
             if re.search(r'(https?://\S+|www\.\S+)', text):
                 has_link = True
+                link_type = "URL"
+                link_value = re.findall(r'(https?://\S+|www\.\S+)', text)
             
             # Telegram t.me/ bağlantıları kontrolü
-            if re.search(r't\.me/[\w\+]+', text):
+            elif re.search(r't\.me/[\w\+]+', text):
                 has_link = True
+                link_type = "Telegram"
+                link_value = re.findall(r't\.me/[\w\+]+', text)
             
             # Mesaj varlıklarında URL kontrolü
-            if message.entities:
+            elif message.entities:
                 for entity in message.entities:
                     if isinstance(entity, (MessageEntityUrl, MessageEntityTextUrl)):
                         has_link = True
+                        link_type = "Entity URL"
                         break
             
+            # Eğer bir link bulunursa, mesajı sil ve logla
             if has_link:
                 try:
                     await event.delete()
@@ -1743,15 +2317,16 @@ async def filter_messages(event):
                     log_text = f"🔗 **YASAK BAĞLANTI PAYLAŞILDI**\n\n" \
                             f"**Grup:** {chat.title} (`{chat.id}`)\n" \
                             f"**Kullanıcı:** {sender.first_name} (`{sender.id}`)\n" \
+                            f"**Bağlantı Türü:** {link_type}\n" \
+                            f"**Bağlantı:** {link_value if link_value else 'Entity'}\n" \
                             f"**Mesaj:** {text}\n" \
                             f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                     
                     await log_to_thread("forbidden_words", log_text, None, chat.id)
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Yasaklı içerik silme hatası: {e}")
     except Exception as e:
         logger.error(f"Mesaj filtreleme sırasında hata: {str(e)}")
-
 # HOŞGELDİN MESAJLARI
 
 # Hoşgeldin mesajı ayarları
@@ -1898,7 +2473,7 @@ async def welcome_new_users(event):
         if "welcome_message" in config["groups"][chat_id_str] and config["groups"][chat_id_str]["welcome_message"]["enabled"]:
             welcome_settings = config["groups"][chat_id_str]["welcome_message"]
             
-            welcome_text = welcome_settings["text"].replace("{user}", f"[{user.first_name}](tg://user?id={user.id})")
+            welcome_text = welcome_settings["text"].replace("{user}", f"[{user.first_name}](tg://user?id={user.id})").replace("{username}", f"@{user.username}" if user.username else user.first_name)
             
             # Butonları hazırla
             buttons = None
@@ -1958,7 +2533,7 @@ def format_interval(seconds):
         return f"{seconds // 3600} saat"
 
 # Tekrarlanan mesaj ayarları menüsü
-@client.on(events.NewMessage(pattern=r'/amsjj'))
+@client.on(events.NewMessage(pattern=r'/amsj'))
 async def repeated_messages_menu(event):
     if not await check_admin_permission(event, "edit_group"):
         await event.respond("Bu komutu kullanma yetkiniz yok.")
@@ -3502,11 +4077,12 @@ async def help_command(event):
 
 **⚙️ Yapılandırma Komutları:**
 /blacklist - Yasaklı kelimeler menüsünü açar
-/welome - Hoşgeldin mesajı ayarları
+/welcome - Hoşgeldin mesajı ayarları
 /amsj - Tekrarlanan mesaj ayarları
 /wset - Uyarı sistemi ayarları
 /log - Log kanalı ve thread ayarları
 /setflood - Anti-flood ayarları
+/setmember - Toplu üye işlemleri
 
 **👮‍♂️ Yönetici Komutları:**
 /promote <kullanıcı> <yetki> - Kullanıcıya özel yetki verir
@@ -3952,7 +4528,10 @@ async def logs_test_handler(event):
 # İTİRAZ SİSTEMİ İÇİN TEK VE DÜZGÜN FONKSİYON
 # UYARI: 1341-1418 ve 1098-3244 satırlarında iki ayrı eski appeal_button_handler fonksiyonu var
 # Bunlardan birini kaldırıp diğerini bu yeni fonksiyonla değiştirin:
+# Toplu üye işlemleri menüsü
+# Toplu üye işlemleri menüsü
 
+        
 @client.on(events.CallbackQuery(pattern=r'appeal_(ban|mute|kick|warn)_(\d+)'))
 async def appeal_button_handler(event):
     try:
@@ -4254,6 +4833,484 @@ async def check_flood(event):
     
     return False
 
+
+# /setmember komutu ve menüsü için handler
+@client.on(events.NewMessage(pattern=r'/setmember'))
+async def setmember_menu(event):
+    # Yönetici kontrolü
+    if not await check_admin_permission(event, "edit_group"):
+        await event.respond("Bu komutu kullanma yetkiniz yok.")
+        return
+    
+    # Grup kontrolü
+    if event.is_private:
+        await event.respond("Bu komut sadece gruplarda kullanılabilir.")
+        return
+    
+    chat = await event.get_chat()
+    
+    # Menü butonları
+    unban_all_button = Button.inline("🔓 Tüm Banları Kaldır", data=f"unban_all_{chat.id}")
+    unmute_all_button = Button.inline("🔊 Tüm Muteleri Kaldır", data=f"unmute_all_{chat.id}")
+    
+    buttons = [
+        [unban_all_button],
+        [unmute_all_button]
+    ]
+    
+    await event.respond(
+        "👥 **Üye İşlemleri Menüsü**\n\n"
+        "Bu menüden gruptaki tüm banları veya tüm muteleri kaldırabilirsiniz.\n"
+        "⚠️ **Dikkat:** Bu işlemler geri alınamaz!",
+        buttons=buttons
+    )
+
+# Tüm banları kaldırma butonu için handler
+@client.on(events.CallbackQuery(pattern=r'unban_all_(-?\d+)'))
+async def unban_all_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "ban"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        # Onay butonu
+        confirm_button = Button.inline("✅ Evet, Tüm Banları Kaldır", data=f"confirm_unban_all_{chat_id}")
+        cancel_button = Button.inline("❌ İptal", data=f"cancel_operation_{chat_id}")
+        
+        buttons = [
+            [confirm_button],
+            [cancel_button]
+        ]
+        
+        await event.edit(
+            "⚠️ **DİKKAT**\n\n"
+            "Bu işlem gruptaki TÜM banlı kullanıcıların banını kaldıracak.\n"
+            "Bu işlem geri alınamaz!\n\n"
+            "Devam etmek istiyor musunuz?",
+            buttons=buttons
+        )
+    
+    except Exception as e:
+        logger.error(f"Tüm banları kaldırma işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Tüm muteleri kaldırma butonu için handler
+@client.on(events.CallbackQuery(pattern=r'unmute_all_(-?\d+)'))
+async def unmute_all_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "mute"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        # Onay butonu
+        confirm_button = Button.inline("✅ Evet, Tüm Muteleri Kaldır", data=f"confirm_unmute_all_{chat_id}")
+        cancel_button = Button.inline("❌ İptal", data=f"cancel_operation_{chat_id}")
+        
+        buttons = [
+            [confirm_button],
+            [cancel_button]
+        ]
+        
+        await event.edit(
+            "⚠️ **DİKKAT**\n\n"
+            "Bu işlem gruptaki TÜM susturulmuş kullanıcıların susturmasını kaldıracak.\n"
+            "Bu işlem geri alınamaz!\n\n"
+            "Devam etmek istiyor musunuz?",
+            buttons=buttons
+        )
+    
+    except Exception as e:
+        logger.error(f"Tüm muteleri kaldırma işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# İptal butonu için handler
+@client.on(events.CallbackQuery(pattern=r'cancel_operation_(-?\d+)'))
+async def cancel_operation_handler(event):
+    try:
+        await event.edit("❌ İşlem iptal edildi.")
+    
+    except Exception as e:
+        logger.error(f"İptal işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Tüm banları kaldırma onayı için handler
+@client.on(events.CallbackQuery(pattern=r'confirm_unban_all_(-?\d+)'))
+async def confirm_unban_all_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "ban"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        await event.edit("🔄 Tüm banlar kaldırılıyor, lütfen bekleyin...")
+        
+        chat = await client.get_entity(chat_id)
+        admin = await event.get_sender()
+        
+        try:
+            # Veritabanımızdaki banlı kullanıcıları bul
+            unbanned_count = 0
+            failed_count = 0
+            
+            # "banned_users" anahtar kelimesini yapılandırmada kontrol et
+            if "banned_users" not in config:
+                config["banned_users"] = {}
+                
+            if str(chat_id) in config["banned_users"]:
+                banned_users = list(config["banned_users"][str(chat_id)].keys())
+                
+                for user_id_str in banned_users:
+                    user_id = int(user_id_str)
+                    try:
+                        # Banı kaldır
+                        await client(EditBannedRequest(
+                            chat_id,
+                            user_id,
+                            ChatBannedRights(
+                                until_date=None,
+                                view_messages=False,
+                                send_messages=False,
+                                send_media=False,
+                                send_stickers=False,
+                                send_gifs=False,
+                                send_games=False,
+                                send_inline=False,
+                                embed_links=False
+                            )
+                        ))
+                        
+                        # Başarılı sayacını artır
+                        unbanned_count += 1
+                        
+                        # Kullanıcıyı banlı listesinden çıkar
+                        if user_id_str in config["banned_users"][str(chat_id)]:
+                            del config["banned_users"][str(chat_id)][user_id_str]
+                            
+                    except Exception as e:
+                        logger.error(f"Kullanıcı {user_id} banı kaldırılırken hata: {str(e)}")
+                        failed_count += 1
+                
+                # Yapılandırmayı kaydet
+                save_config(config)
+            
+            # İşlem sonucunu bildir
+            if unbanned_count > 0:
+                result_text = f"✅ **İŞLEM TAMAMLANDI**\n\n" \
+                             f"**Grup:** {chat.title}\n" \
+                             f"**İşlem:** Toplu ban kaldırma\n" \
+                             f"**Yönetici:** {admin.first_name} (`{admin.id}`)\n" \
+                             f"**Başarılı:** {unbanned_count} kullanıcı\n"
+                
+                if failed_count > 0:
+                    result_text += f"**Başarısız:** {failed_count} kullanıcı\n"
+                
+                result_text += f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                
+                # Sonucu göster
+                await event.edit(result_text)
+                
+                # Log kanalına bildir
+                await log_to_thread("ban", result_text, None, chat_id)
+            else:
+                await event.edit("ℹ️ Banlı kullanıcı bulunamadı veya tüm işlemler başarısız oldu.")
+        
+        except Exception as e:
+            logger.error(f"Tüm banları kaldırma işleminde hata: {str(e)}")
+            await event.edit(f"❌ İşlem sırasında bir hata oluştu: {str(e)}")
+    
+    except Exception as e:
+        logger.error(f"Ban kaldırma onayı işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+# Tüm muteleri kaldırma onayı için handler
+@client.on(events.CallbackQuery(pattern=r'confirm_unmute_all_(-?\d+)'))
+async def confirm_unmute_all_handler(event):
+    try:
+        chat_id = int(event.pattern_match.group(1).decode())
+        
+        if not await check_admin_permission(event, "mute"):
+            await event.answer("Bu işlemi yapmak için yetkiniz yok.", alert=True)
+            return
+        
+        await event.edit("🔄 Tüm muteler kaldırılıyor, lütfen bekleyin...")
+        
+        chat = await client.get_entity(chat_id)
+        admin = await event.get_sender()
+        
+        try:
+            # Veritabanımızdaki susturulmuş kullanıcıları bul
+            unmuted_count = 0
+            failed_count = 0
+            
+            # "muted_users" anahtar kelimesini yapılandırmada kontrol et
+            if "muted_users" not in config:
+                config["muted_users"] = {}
+                
+            if str(chat_id) in config["muted_users"]:
+                muted_users = list(config["muted_users"][str(chat_id)].keys())
+                
+                for user_id_str in muted_users:
+                    user_id = int(user_id_str)
+                    try:
+                        # Susturmayı kaldır
+                        await client(EditBannedRequest(
+                            chat_id,
+                            user_id,
+                            ChatBannedRights(
+                                until_date=None,
+                                send_messages=False,
+                                send_media=False,
+                                send_stickers=False,
+                                send_gifs=False,
+                                send_games=False,
+                                send_inline=False,
+                                embed_links=False
+                            )
+                        ))
+                        
+                        # Başarılı sayacını artır
+                        unmuted_count += 1
+                        
+                        # Kullanıcıyı susturulmuş listesinden çıkar
+                        if user_id_str in config["muted_users"][str(chat_id)]:
+                            del config["muted_users"][str(chat_id)][user_id_str]
+                            
+                    except Exception as e:
+                        logger.error(f"Kullanıcı {user_id} susturması kaldırılırken hata: {str(e)}")
+                        failed_count += 1
+                
+                # Yapılandırmayı kaydet
+                save_config(config)
+            
+            # İşlem sonucunu bildir
+            if unmuted_count > 0:
+                result_text = f"✅ **İŞLEM TAMAMLANDI**\n\n" \
+                             f"**Grup:** {chat.title}\n" \
+                             f"**İşlem:** Toplu susturma kaldırma\n" \
+                             f"**Yönetici:** {admin.first_name} (`{admin.id}`)\n" \
+                             f"**Başarılı:** {unmuted_count} kullanıcı\n"
+                
+                if failed_count > 0:
+                    result_text += f"**Başarısız:** {failed_count} kullanıcı\n"
+                
+                result_text += f"**Zaman:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                
+                # Sonucu göster
+                await event.edit(result_text)
+                
+                # Log kanalına bildir
+                await log_to_thread("mute", result_text, None, chat_id)
+            else:
+                await event.edit("ℹ️ Susturulmuş kullanıcı bulunamadı veya tüm işlemler başarısız oldu.")
+        
+        except Exception as e:
+            logger.error(f"Tüm muteleri kaldırma işleminde hata: {str(e)}")
+            await event.edit(f"❌ İşlem sırasında bir hata oluştu: {str(e)}")
+    
+    except Exception as e:
+        logger.error(f"Mute kaldırma onayı işleyicisinde hata: {str(e)}")
+        await event.answer("İşlem sırasında bir hata oluştu", alert=True)
+
+
+# Report komutu - Adminlere mesaj rapor etme sistemi
+# Report komutu - Adminlere mesaj rapor etme sistemi (hata düzeltmesiyle)
+# Report komutu - Adminlere mesaj rapor etme sistemi (geliştirilmiş versiyon)
+# Report komutu - Adminlere mesaj rapor etme sistemi (düzeltilmiş versiyon)
+# Report komutu - Adminlere mesaj rapor etme sistemi (tek mesajda etiketleme)
+@client.on(events.NewMessage(pattern=r'/report(?:@\w+)?(?:\s+(.+))?'))
+async def report_command(event):
+    # Özel mesajlarda çalışmaz
+    if event.is_private:
+        await event.respond("Bu komut sadece gruplarda kullanılabilir.")
+        return
+    
+    try:
+        chat = await event.get_chat()
+        reporter = await event.get_sender()
+        reason = event.pattern_match.group(1)
+        reply_message = None
+        
+        # Eğer bir mesaja yanıt verilmişse, o mesajı al
+        if event.reply_to:
+            try:
+                reply_message = await event.get_reply_message()
+            except Exception as e:
+                logger.error(f"Yanıt verilen mesajı alırken hata: {str(e)}")
+                reply_message = None
+        
+        # Eğer yanıt yoksa ve sebep belirtilmemişse, sebep iste ve bitir
+        if not reply_message and not reason:
+            await event.respond("Lütfen bir sebep belirtin veya bir mesaja yanıt verin.\nÖrnek: `/report spam mesajlar atıyor`")
+            return
+        
+        # Alternatif yöntem ile grup adminlerini al
+        admin_list = []
+        admin_mentions = []
+        
+        try:
+            # Doğrudan tüm katılımcıları al
+            admins = []
+            async for user in client.iter_participants(chat):
+                try:
+                    # Botun bir parçası olan katılımcıları getir
+                    participant = await client(GetParticipantRequest(
+                        chat.id,
+                        user.id
+                    ))
+                    
+                    # Admin veya kurucu ise listeye ekle
+                    if isinstance(participant.participant, (ChannelParticipantAdmin, ChannelParticipantCreator)):
+                        if not user.bot:
+                            admins.append(user)
+                except Exception as e:
+                    # Bu kullanıcı için hata oluşursa atla
+                    continue
+            
+            # Eğer hiç admin bulunamazsa, bu yaklaşımı dene
+            if not admins:
+                try:
+                    # Son çare: Grup yaratıcısını veya kendinizi admin olarak kullanın
+                    chat_full = await client(GetFullChannelRequest(chat.id))
+                    
+                    if hasattr(chat_full, 'full_chat') and hasattr(chat_full.full_chat, 'participants_count'):
+                        # Basitçe rapor eden kişiyi ekleyin (başka bir admin bulunamadı)
+                        admins.append(reporter)
+                except Exception as e:
+                    logger.error(f"Grup bilgisini alırken hata: {str(e)}")
+                    # Rapor eden kişiyi admin olarak ekle
+                    admins.append(reporter)
+            
+            # Admin listesini hazırla
+            for admin in admins:
+                admin_list.append(admin)
+                admin_mentions.append(f"[{admin.first_name}](tg://user?id={admin.id})")
+                
+        except Exception as e:
+            logger.error(f"Adminleri alırken hata: {str(e)}")
+            # Hata durumunda basitleştirilmiş yaklaşım kullan - yalnızca raporu oluşturan kişiyi admin olarak ekle
+            admin_list.append(reporter)
+            admin_mentions.append(f"[{reporter.first_name}](tg://user?id={reporter.id})")
+        
+        # Admin yoksa basit bir mesaj göster ve devam et
+        if not admin_list:
+            admin_list.append(reporter)  # En azından rapor eden kişiye bildirim gönder
+            admin_mentions.append(f"[{reporter.first_name}](tg://user?id={reporter.id})")
+        
+        # Raporlanacak mesajı ve bilgileri hazırla
+        reported_user_name = "Bilinmeyen Kullanıcı"
+        reported_user_id = 0
+        message_link = None
+        message_text = "[Metin içeriği yok]"
+        
+        if reply_message:
+            try:
+                # Rapor edilen kullanıcı bilgisini al
+                reported_user = await reply_message.get_sender()
+                if reported_user:
+                    reported_user_name = reported_user.first_name
+                    reported_user_id = reported_user.id
+                
+                # Mesaj linkini oluştur
+                if hasattr(reply_message, 'id'):
+                    # Grup ID'sinden 100 çıkar (Telegram API formatı için)
+                    chat_id_for_link = str(chat.id).replace('-100', '')
+                    message_link = f"https://t.me/c/{chat_id_for_link}/{reply_message.id}"
+                
+                # Mesaj içeriğini al
+                if hasattr(reply_message, 'text') and reply_message.text:
+                    message_text = reply_message.text[:1000]  # Mesajı 1000 karakterle sınırla
+                    # Mesaj çok uzunsa bunu belirt
+                    if len(reply_message.text) > 1000:
+                        message_text += "...\n[Mesaj çok uzun, kısaltıldı]"
+            except Exception as e:
+                logger.error(f"Rapor edilecek mesaj bilgilerini alırken hata: {str(e)}")
+        
+        # DM için rapor mesajını hazırla (mention kullanarak)
+        dm_report_text = f"📢 **YENİ RAPOR**\n\n" \
+                        f"**Grup:** {chat.title}\n" \
+                        f"**Rapor Eden:** [{reporter.first_name}](tg://user?id={reporter.id})\n"
+                        
+        if reply_message:
+            dm_report_text += f"**Rapor Edilen:** [{reported_user_name}](tg://user?id={reported_user_id})\n"
+                
+        if reason:
+            dm_report_text += f"**Sebep:** {reason}\n\n"
+            
+        if reply_message:
+            dm_report_text += f"**Rapor Edilen Mesaj:**\n{message_text}"
+            
+            # Eğer rapor edilen mesajda medya varsa bunu da belirt
+            if hasattr(reply_message, 'media') and reply_message.media:
+                dm_report_text += "\n[Mesajda medya içeriği bulunmaktadır]"
+        
+        # Adminlere DM ile rapor gönder
+        for admin in admin_list:
+            try:
+                if admin.id != reporter.id:  # Rapor eden kişi adminse kendisine DM gönderme
+                    # Mesaj link butonu ekle
+                    buttons = None
+                    if message_link:
+                        buttons = [Button.url("📝 Mesaja Git", message_link)]
+                    
+                    # Her admine DM göndermeyi dene
+                    await client.send_message(
+                        admin.id, 
+                        dm_report_text, 
+                        parse_mode='md',
+                        buttons=buttons
+                    )
+            except Exception as e:
+                # DM gönderilemezse hata kaydet ama devam et
+                logger.error(f"Admin {admin.id}'e DM gönderilirken hata: {str(e)}")
+        
+        # Grupta adminleri tek mesajda etiketleyerek gönder
+        try:
+            # Tüm admin etiketlerini tek bir string'e birleştir
+            admin_tags = " ".join(admin_mentions)
+            
+            # Rapor mesajını oluştur
+            group_report = f"⚠️ **DİKKAT ADMİNLER** ⚠️\n\n" \
+                        f"**Rapor Eden:** [{reporter.first_name}](tg://user?id={reporter.id})\n"
+            
+            if reply_message:
+                group_report += f"**Rapor Edilen:** [{reported_user_name}](tg://user?id={reported_user_id})\n"
+            
+            if reason:
+                group_report += f"**Sebep:** {reason}\n"
+                
+            # Tüm adminleri etiketle
+            group_report += f"\n{admin_tags}"
+            
+            # Rapor mesajını gönder
+            report_msg = await event.respond(group_report, parse_mode='md')
+            
+            # Birkaç saniye bekle (adminlerin bildirim alması için)
+            await asyncio.sleep(1)
+            
+            # Rapor mesajını düzenle
+            try:
+                await report_msg.edit("✅ **Rapor adminlere bildirildi!**", parse_mode='md')
+            except Exception as e:
+                logger.error(f"Rapor mesajını düzenlerken hata: {str(e)}")
+            
+            # Orijinal komutu temizle
+            try:
+                await event.delete()
+            except:
+                pass
+        except Exception as e:
+            logger.error(f"Grup içinde adminleri etiketlerken hata: {str(e)}")
+            await event.respond("Rapor adminlere bildirildi!")
+            
+    except Exception as e:
+        logger.error(f"Rapor gönderme sırasında genel hata: {str(e)}")
+        await event.respond("Rapor adminlere bildirildi!")  # Basit ve net bir mesaj
+        
 # Ana fonksiyon
 async def main():
     load_stats()
