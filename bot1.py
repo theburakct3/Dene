@@ -13,6 +13,7 @@ import asyncio
 import re
 import os
 import time
+import signal
 import uuid
 import logging
 import pytz
@@ -58,12 +59,20 @@ cache_timeout = 3600  # 1 saat
 entity_cache = {}
 
 async def get_cached_entity(client, entity_id, force_fetch=False):
-    """Get entity with cache"""
+    """Get entity with improved error handling"""
     try:
         if not force_fetch and entity_id in entity_cache:
             return entity_cache[entity_id]
         
-        entity = await client.get_entity(entity_id)
+        try:
+            entity = await client.get_entity(entity_id)
+        except ValueError:
+            # ID'yi int'e çevirmeyi dene
+            try:
+                entity = await client.get_entity(int(entity_id))
+            except:
+                return None
+            
         entity_cache[entity_id] = entity
         return entity
     except Exception as e:
@@ -2455,6 +2464,10 @@ async def welcome_message_menu(event):
         f"{button_info}",
         buttons=buttons
     )
+
+
+
+
 
 # Hoşgeldin mesajı menü işleyicileri
 @client.on(events.CallbackQuery(pattern=r'welcome_(toggle|text|add_button|clear_buttons)_(-?\d+)'))
@@ -6213,6 +6226,15 @@ Not: Federasyon sahibi tüm yetkilere sahiptir."""
 
     await event.respond(help_text)
 
+def signal_handler(signum, frame):
+    """Güvenli kapatma için signal handler"""
+    print("\nBot güvenli bir şekilde kapatılıyor...")
+    if _db_connection:
+        _db_connection.close()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 # Ana fonksiyon
 async def main():
@@ -6236,18 +6258,5 @@ async def main():
 
 # Bot'u başlat
 if __name__ == "__main__":
-    try:
-        # Global veritabanı bağlantısını başlat
-        get_db()
-        
-        with client:
-            print("Bot başlatılıyor...")
-            client.loop.run_until_complete(main())
-    except KeyboardInterrupt:
-        print("\nBot güvenli bir şekilde kapatılıyor...")
-    except Exception as e:
-        print(f"Kritik hata: {e}")
-    finally:
-        # Veritabanı bağlantısını kapat
-        if _db_connection:
-            _db_connection.close()
+    with client:
+        client.loop.run_until_complete(main())
